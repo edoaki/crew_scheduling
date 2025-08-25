@@ -1,0 +1,95 @@
+metadata:
+  line_name: sample
+  track_type: double
+  directions:
+    up: "A" # Aに向かう向きが up
+    down: "J" # Jに向かう向きが down
+
+stations:
+  - id: A
+    express_stop: true         # 急行停車
+    depot: True               # 留置所の有無
+    crew_rest: true            # 乗務員休憩可
+    turnback: true             # 折返し可（終端）
+  - id: B
+    express_stop: false
+    depot: true
+    crew_rest: true
+    turnback: true
+  - id: C
+    express_stop: false
+    depot: false
+    crew_rest: false
+    turnback: false
+  - id: D
+    express_stop: false
+    depot: false
+    crew_rest: false
+    turnback: false
+  - id: E
+    express_stop: true
+    depot: false
+    crew_rest: true
+    turnback: true             # 途中折返し想定
+  - id: F
+    express_stop: false
+    depot: false
+    crew_rest: false
+    turnback: false
+  - id: J
+    express_stop: true
+    depot: true
+    crew_rest: true
+    turnback: true             # 終端
+
+# 隣接駅ごとの所要（local/rapid）
+segments:
+  -local:
+    - from: A
+      to: B
+      time: "00:05"
+    - from: B
+      to: C
+      time: "00:06"
+    - from: C
+      to: D
+      time: "00:05"
+    - from: D
+      to: E
+      time: "00:06"
+    - from: E
+      to: F
+      time: "00:05"
+    - from: F
+      to: J
+      time: "00:06"
+  -rapid:
+    - from: A
+      to: E
+      time: "00:20"
+    - from: E
+      to: J
+      time: "00:10"
+
+min_times:                   # 下限時間（デフォルト）
+  dwell: "00:01"            # 停車（開扉）最短
+  turnback: "00:07"         # 折返し最短（入換含む）
+# 駅個別の下限時間上書き
+min_times_overrides:
+  dwell:
+    E: "00:02"
+
+# 出発間隔（停車発車／折返し発車で別設定）
+headway:
+  - service: local
+    after_stop: "00:03"
+    after_turnback: "00:05"
+  - service: rapid
+    after_stop: "00:04"
+    after_turnback: "00:06"
+
+# 参考：本線の並び（チェック用）
+topology:
+  ordered_stations: [A, B, C, D, E, F, J]
+
+

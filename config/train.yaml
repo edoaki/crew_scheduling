@@ -1,0 +1,59 @@
+
+# 新規配置（出庫・新たに走らせる）
+dispatch:
+  - station: B
+    windows:
+      - start: "07:00"
+        end: "09:00"
+        count: 5
+        direction: up
+        service: local  
+      - start: "10:00"
+        end: "12:00"
+        count: 3
+        direction: down
+        service: local
+      - start: "13:00"
+        end: "15:00"
+        count: 4
+        direction: up
+        service: local
+              
+# 入庫・留置（指定駅に到着した列車を確率で取り込み）
+stabling:
+  - station: B
+    direction_inbound: down     # 指定方向から到着したら判定
+    start: "10:00"
+    target_count: 3             # 取り込む台数に達するまで判定
+    probability: 0.3            # 到着ごとの入庫確率
+    min_interval: "00:30"       # 入庫間隔の下限（30分）
+
+# 種別変換（local⇄rapid）
+service_conversion:
+  # Aにup方向で到着したlocalをrapidに変換する
+  - station: A 
+    direction: up
+    start: "06:00"
+    from_type: local
+    to_type: rapid
+    target_count: 4
+    probability: 0.8           # 到着ごとの変換確率
+    min_interval: "00:20" # 最後の変換からの下限時間
+  - station: E
+    direction: down
+    start: "06:00"
+    from_type: rapid
+    to_type: local
+    target_count: 2
+    probability: 0.5
+    min_interval: "00:30"
+
+# 途中折返し（短絡折返し）
+short_turn:
+  - station: E
+    direction: up
+    service: local
+    start: "06:00"
+    target_count: 4
+    probability: 0.8
+    min_interval: "00:20"
