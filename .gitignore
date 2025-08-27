@@ -1,0 +1,88 @@
+# --- OS / Editor ---
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.swn
+*~
+.vscode/
+.idea/
+*.iml
+
+# --- Python bytecode / C extensions ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+*.pyo
+
+# --- Environments ---
+.venv/
+venv/
+env/
+ENV/
+.conda/
+.python-version
+
+# --- Packaging ---
+build/
+dist/
+.eggs/
+*.egg-info/
+*.egg
+
+# --- Testing / Coverage / Lint ---
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.pytype/
+.pyre/
+.ruff_cache/
+.pylint.d/
+.cache/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Logs / Temp ---
+logs/
+*.log
+nohup.out
+tmp/
+temp/
+*.tmp
+*.bak
+
+# --- Data caches (keep source data under versioned dirs if needed) ---
+data/
+
+# --- ML / RL artifacts ---
+checkpoints/
+runs/
+wandb/
+mlruns/
+ray_results/
+tensorboard/
+lightning_logs/
+output/
+outputs/
+*.ckpt
+*.pt
+*.pth
+*.onnx
+
+# --- Credentials / Env files ---
+.env
+.env.*
+
+# --- Databases ---
+*.db
+*.sqlite3
+
+# --- Tool-specific ---
+gurobi.lic

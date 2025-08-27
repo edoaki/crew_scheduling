@@ -50,7 +50,7 @@ segments:
       time: "00:05"
     - from: B
       to: C
-      time: "00:06"
+      time: "00:02"
     - from: C
       to: D
       time: "00:05"
@@ -59,7 +59,7 @@ segments:
       time: "00:06"
     - from: E
       to: F
-      time: "00:05"
+      time: "00:02"
     - from: F
       to: J
       time: "00:06"

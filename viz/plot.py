@@ -1,133 +1,222 @@
-# viz/plot.py
-import math
-from collections import defaultdict
-from typing import Dict, List
-
+from __future__ import annotations
+from typing import Dict, Any, List, Set
+from datetime import datetime, timedelta
 import numpy as np
-from bokeh.models import ColumnDataSource
-from bokeh.models.tickers import FixedTicker
-from bokeh.models.formatters import CustomJSTickFormatter
+import plotly.graph_objects as go
 
-from bokeh.plotting import figure
+# コア関数/定数を分離
+from .plot_core import (
+    MS10MIN, MS1HOUR, COLORS,
+    hhmm, service_key,
+    station_positions_by_local_time, group_by_train,
+    detect_turnbacks, add_cap_arc_buffer, is_turnback_pair,
+)
 
-COLOR_BY_SERVICE = {"local": "green", "rapid": "red"}
+def build_diamond_figure(
+    data: Dict[str, Any],
+    station_order: List[str],
+    visible_trains: Set[str],
+) -> go.Figure:
+    """
+    ・横方向のみズーム
+    ・1時間ごとのラベル、10分ごとの縦グリッド
+    ・区間ごとに local/rapid を色分け（local=緑、rapid=赤）
+    ・停車は横線で接続（ただし折返しの場合は引かない）
+    ・折返しは半円（パラボラ）で表示（local=黄緑、rapid=オレンジ）
+    ・Aが上（autorange=reversed）
+    ・出庫=○、収納=△（黒固定）
+    ・ホバーは最も近い1件のみ表示
+    """
+    base = datetime(1970, 1, 1)
 
-def build_sources(bundle: Dict[str, np.ndarray], ymap: Dict[str, float]):
-    dep_st = bundle["depart_station"]
-    arr_st = bundle["arrive_station"]
-    dep_t = bundle["depart_time"].astype(int)
-    arr_t = bundle["arrive_time"].astype(int)
-    svc = bundle["service"]
-    direc = bundle["direction"]
-    tid = bundle["train_ids"]
+    dep_times = np.asarray(data["depart_time"]).astype(int, copy=False) if len(data["depart_time"]) else np.array([0])
+    arr_times = np.asarray(data["arrive_time"]).astype(int, copy=False) if len(data["arrive_time"]) else np.array([60])
+    tmin = int(dep_times.min()) if dep_times.size else 0
+    tmax = int(arr_times.max()) if arr_times.size else 60
+    x_min = base + timedelta(minutes=tmin - 5)
+    x_max = base + timedelta(minutes=tmax + 5)
 
-    n = len(dep_t)
-    x0 = dep_t
-    y0 = np.array([ymap.get(s, 0.0) for s in dep_st], dtype=float)
-    x1 = arr_t
-    y1 = np.array([ymap.get(s, 0.0) for s in arr_st], dtype=float)
-    color = np.array([COLOR_BY_SERVICE.get(s, "gray") for s in svc], dtype=object)
+    # 駅の縦位置（local 所要時間比で内分）
+    st2y = station_positions_by_local_time(station_order, data)
+    yvals = [st2y[s] for s in station_order]
+    y_top, y_bottom = -0.5, max(yvals) + 0.5
 
-    seg_src = ColumnDataSource(dict(
-        x0=x0, y0=y0, x1=x1, y1=y1,
-        train_id=tid, depart_station=dep_st, arrive_station=arr_st,
-        depart_time=dep_t, arrive_time=arr_t,
-        service=svc, direction=direc, color=color,
-        idx=np.arange(n),
-    ))
+    # 列車ごとのインデックス
+    groups = group_by_train(data)
 
-    by_tid = defaultdict(list)
-    for i, tr in enumerate(tid):
-        by_tid[tr].append(i)
+    fig = go.Figure()
 
-    first_points = []
-    last_points = []
-    for tr, idxs in by_tid.items():
-        idxs = sorted(idxs, key=lambda i: (dep_t[i], arr_t[i]))
-        first_points.append(idxs[0])
-        last_points.append(idxs[-1])
+    # 折返しアークのまとめバッファ（service × 方向）
+    cap_x = {"local": {"up_cap": [], "down_cap": []}, "rapid": {"up_cap": [], "down_cap": []}}
+    cap_y = {"local": {"up_cap": [], "down_cap": []}, "rapid": {"up_cap": [], "down_cap": []}}
 
-    start_src = ColumnDataSource(dict(
-        x=dep_t[first_points],
-        y=y0[first_points],
-        train_id=tid[first_points],
-        station=dep_st[first_points],
-        time=dep_t[first_points],
-        service=svc[first_points],
-        direction=direc[first_points],
-        color=color[first_points],
-    ))
-    end_src = ColumnDataSource(dict(
-        x=arr_t[last_points],
-        y=y1[last_points],
-        train_id=tid[last_points],
-        station=arr_st[last_points],
-        time=arr_t[last_points],
-        service=svc[last_points],
-        direction=direc[last_points],
-        color=color[last_points],
-    ))
+    # 出庫/収納マーカー（黒固定）
+    start_x = []; start_y = []
+    end_x = []; end_y = []
 
-    arc_xs, arc_ys, arc_col, arc_tid = [], [], [], []
-    for tr, idxs in by_tid.items():
-        idxs = sorted(idxs, key=lambda i: (dep_t[i], arr_t[i]))
-        for a, b in zip(idxs, idxs[1:]):
-            if arr_st[a] == dep_st[b] and direc[a] != direc[b]:
-                t0 = arr_t[a]
-                t1 = dep_t[b]
-                y = y1[a]
-                steps = max(8, int((t1 - t0) / 2) + 1)
-                xs = np.linspace(t0, t1, steps)
-                amp = 0.3
-                ys = y + amp * np.sin(np.linspace(0, math.pi, steps))
-                arc_xs.append(xs.tolist())
-                arc_ys.append(ys.tolist())
-                arc_col.append(COLOR_BY_SERVICE.get(svc[b], "gray"))
-                arc_tid.append(tr)
-    arc_src = ColumnDataSource(dict(xs=arc_xs, ys=arc_ys, color=arc_col, train_id=np.array(arc_tid, dtype=str)))
+    for tid, idxs in groups.items():
+        if tid not in visible_trains:
+            continue
 
-    return seg_src, start_src, end_src, arc_src
+        # 区間ごとに service を見て、local/rapid で別トレース（停車もつなぐ）
+        xs_local: List = []; ys_local: List = []; cd_local: List = []
+        xs_rapid: List = []; ys_rapid: List = []; cd_rapid: List = []
 
-def make_figure(topo: List[str], ymap: Dict[str, float], seg_src, start_src, end_src, arc_src):
-    all_x = list(seg_src.data["x0"]) + list(seg_src.data["x1"])
-    x_min, x_max = (min(all_x), max(all_x)) if all_x else (0, 60)
+        for k, i in enumerate(idxs):
+            dt, at = int(data["depart_time"][i]), int(data["arrive_time"][i])
+            u, v = str(data["depart_station"][i]), str(data["arrive_station"][i])
+            sv = service_key(data["service"][i]) if "service" in data else "local"
+            yu, yv = st2y[u], st2y[v]
+            mid = dt + (at - dt) / 2.0
+            ym = yu + (yv - yu) / 2.0
 
-    yvals = [ymap[s] for s in topo if s in ymap]
-    y_min, y_max = (min(yvals), max(yvals)) if yvals else (0.0, 1.0)
+            xs_seg = [base + timedelta(minutes=dt), base + timedelta(minutes=mid), base + timedelta(minutes=at), None]
+            ys_seg = [yu, ym, yv, None]
+            cd_seg = [(
+                tid, u, v, hhmm(dt), hhmm(at),
+                str(data["service"][i]) if "service" in data else "local",
+                str(data.get("direction", ["None"])[i]) if "direction" in data else "None",
+            )] * 3 + [("", "", "", "", "", "", "")]
 
-    p = figure(
-        height=700, sizing_mode="stretch_width",
-        x_range=(x_min, x_max + 60),
-        y_range=(y_min - 1, y_max + 1),
-        tools="xpan,xwheel_zoom,reset,save,tap",
-        active_drag="xpan", active_scroll="xwheel_zoom",
-        title="ダイヤグラム（local=緑, rapid=赤 / 折返し=点線の弧 / ○=新規発車, ▲=収納候補）"
+            if sv == "rapid":
+                xs_rapid += xs_seg; ys_rapid += ys_seg; cd_rapid += cd_seg
+            else:
+                xs_local += xs_seg; ys_local += ys_seg; cd_local += cd_seg
+
+            # 停車横線（次区間が折返しでない場合だけ描く）
+            if k < len(idxs) - 1:
+                j = idxs[k + 1]
+                if str(data["arrive_station"][i]) == str(data["depart_station"][j]) and not is_turnback_pair(data, i, j, st2y):
+                    t0, t1 = int(data["arrive_time"][i]), int(data["depart_time"][j])
+                    st = str(data["arrive_station"][i])
+                    y = st2y[st]
+                    sv_next = service_key(data["service"][j]) if "service" in data else "local"
+                    xs_dw = [base + timedelta(minutes=t0), base + timedelta(minutes=t1), None]
+                    ys_dw = [y, y, None]
+                    cd_dw = [(
+                        tid, st, st, hhmm(t0), hhmm(t1),
+                        str(data["service"][j]) if "service" in data else "local",
+                        str(data.get("direction", ["None"])[j]) if "direction" in data else "None",
+                    )] * 2 + [("", "", "", "", "", "", "")]
+                    if sv_next == "rapid":
+                        xs_rapid += xs_dw; ys_rapid += ys_dw; cd_rapid += cd_dw
+                    else:
+                        xs_local += xs_dw; ys_local += ys_dw; cd_local += cd_dw
+
+        # 出庫（○）・収納（△）マーカー位置（黒固定）
+        i0, i1 = idxs[0], idxs[-1]
+        start_x.append(base + timedelta(minutes=int(data["depart_time"][i0]))); start_y.append(st2y[str(data["depart_station"][i0])])
+        end_x.append(base + timedelta(minutes=int(data["arrive_time"][i1])));   end_y.append(st2y[str(data["arrive_station"][i1])])
+
+        # 折返し（半円）をまとめる
+        for a_t, b_t, st, ori, sv in detect_turnbacks(data, idxs, st2y):
+            add_cap_arc_buffer(cap_x[sv][ori], cap_y[sv][ori], float(a_t), float(b_t), st2y[st], ori, base)
+
+        # 列車の線を追加（2トレース）
+        if xs_local:
+            fig.add_trace(go.Scatter(
+                x=xs_local, y=ys_local, mode="lines",
+                line=dict(width=2, color=COLORS["local_line"]),
+                hovertemplate=(
+                    "train_id=%{customdata[0]}<br>"
+                    "station=%{y}<br>"
+                    "%{customdata[1]}→%{customdata[2]}<br>"
+                    "%{customdata[3]}→%{customdata[4]}<br>"
+                    "service=%{customdata[5]}<br>"
+                    "direction=%{customdata[6]}<extra></extra>"
+                ),
+                customdata=cd_local,
+                name=str(tid),
+                showlegend=False,
+            ))
+        if xs_rapid:
+            fig.add_trace(go.Scatter(
+                x=xs_rapid, y=ys_rapid, mode="lines",
+                line=dict(width=2, color=COLORS["rapid_line"]),
+                hovertemplate=(
+                    "train_id=%{customdata[0]}<br>"
+                    "station=%{y}<br>"
+                    "%{customdata[1]}→%{customdata[2]}<br>"
+                    "%{customdata[3]}→%{customdata[4]}<br>"
+                    "service=%{customdata[5]}<br>"
+                    "direction=%{customdata[6]}<extra></extra>"
+                ),
+                customdata=cd_rapid,
+                name=str(tid),
+                showlegend=False,
+            ))
+
+    # 折返し（半円）を一括追加（点線）
+    for sv in ("local", "rapid"):
+        for ori, clr in (("up_cap", COLORS["local_turn"] if sv=="local" else COLORS["rapid_turn"]),
+                         ("down_cap", COLORS["local_turn"] if sv=="local" else COLORS["rapid_turn"])):
+            xs, ys = cap_x[sv][ori], cap_y[sv][ori]
+            if xs:
+                fig.add_trace(go.Scatter(
+                    x=xs, y=ys, mode="lines",
+                    line=dict(width=2, dash="dot", color=clr),
+                    hoverinfo="skip",
+                    showlegend=False,
+                ))
+
+    # 出庫/収納マーカー（黒固定）
+    if start_x:
+        fig.add_trace(go.Scatter(
+            x=start_x, y=start_y, mode="markers",
+            marker=dict(symbol="circle-open", size=10, line=dict(color="black", width=2)),
+            hoverinfo="skip", showlegend=False,
+        ))
+    if end_x:
+        fig.add_trace(go.Scatter(
+            x=end_x, y=end_y, mode="markers",
+            marker=dict(symbol="triangle-up", size=9, color="black"),
+            hoverinfo="skip", showlegend=False,
+        ))
+
+    # 軸設定（Aが上、横方向のみズーム）――駅ごとに横線（Yグリッド）も表示
+    first_hour_min = (tmin // 60) * 60
+    tick0_hour = base + timedelta(minutes=first_hour_min)
+    first_10m_min = (tmin // 10) * 10
+    tick0_10m = base + timedelta(minutes=first_10m_min)
+
+    fig.update_yaxes(
+        tickmode="array",
+        tickvals=yvals,
+        ticktext=station_order,
+        range=[y_top, y_bottom],
+        autorange="reversed",
+        title_text="駅",
+        fixedrange=True,
+        showgrid=True,
+        gridcolor="#CFCFCF",
+        gridwidth=1,
+    )
+    fig.update_xaxes(
+        title_text="時刻",
+        tickformat="%H:%M",
+        tick0=tick0_hour,
+        dtick=MS1HOUR,        # ラベルは 1h 刻み
+        range=[x_min, x_max],
+        showgrid=True,
+        gridwidth=1,
+        minor=dict(          # 10分ごとの縦グリッド（ラベル無し）
+            tick0=tick0_10m,
+            dtick=MS10MIN,
+            showgrid=True,
+            gridwidth=0.5,
+            gridcolor="#DDDDDD",
+        ),
     )
 
-    start_30 = (x_min // 30) * 30
-    end_30 = ((x_max + 29) // 30) * 30
-    ticks = list(range(start_30, end_30 + 1, 30))
-    p.xaxis.ticker = FixedTicker(ticks=ticks)
-    p.xaxis.formatter =CustomJSTickFormatter(code="""
-        const m = tick;
-        const h = Math.floor(m / 60);
-        const mi = m % 60;
-        return ('0'+h).slice(-2) + ':' + ('0'+mi).slice(-2);
-    """)
-
-    y_ticks = [ymap[s] for s in topo if s in ymap]
-    y_labels = {ymap[s]: s for s in topo if s in ymap}
-    p.yaxis.ticker = FixedTicker(ticks=y_ticks)
-    p.yaxis.formatter =CustomJSTickFormatter(code=f"""
-        const labels = {y_labels};
-        return (tick in labels) ? labels[tick] : tick.toString();
-    """)
-
-    seg_glyph = p.segment("x0", "y0", "x1", "y1", color="color", line_width=2, source=seg_src)
-    arc_glyph = p.multi_line(xs="xs", ys="ys", line_color="color", line_dash="dashed", line_width=1.5, source=arc_src)
-
-    # circle()/triangle() は非推奨なので scatter を使用
-    start_r = p.scatter(x="x", y="y", size=6, marker="circle", color="color", line_color="black", source=start_src)
-    end_r = p.scatter(x="x", y="y", size=8, marker="triangle", color="color", line_color="black", source=end_src)
-
-    return p, {"seg": seg_glyph, "arc": arc_glyph, "start": start_r, "end": end_r}
+    height = 80 * len(station_order) + 120
+    width = 1200
+    fig.update_layout(
+        hovermode="closest",   # 近い1件だけ
+        hoverdistance=15,
+        dragmode="pan",
+        margin=dict(l=60, r=20, t=40, b=60),
+        width=width, height=height,
+        showlegend=False,
+        uirevision=True,
+    )
+    return fig
