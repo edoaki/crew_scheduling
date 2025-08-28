@@ -8,7 +8,31 @@ import numpy as np
 
 from timetable.io_npz import load_timetable_bundle
 
+from timetable.generator import generate_and_save
+
 DATA_DIR = Path("data")
+CONFIG_DIR = Path("config")
+
+with st.sidebar:
+    st.header("生成")
+    out_name = st.text_input("保存ファイル名（拡張子なし）", value="timetable")
+    if st.button("生成", type="primary"):
+        station_yaml = str(CONFIG_DIR / "station.yaml")
+        train_yaml = str(CONFIG_DIR / "train.yaml")
+        constraints_yaml = str(CONFIG_DIR / "constraints.yaml")
+        out_path = str(DATA_DIR / f"{out_name}.npz")
+        ok, msg = generate_and_save(station_yaml, train_yaml,constraints_yaml,out_path)
+        
+st.sidebar.markdown(
+    """
+    <style>
+    [data-testid="stSidebar"] [data-testid="stMultiSelect"] div[role="listbox"]{
+        max-height: 60vh !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 st.set_page_config(page_title="ラウンド検査ビュー", layout="wide")
 st.title("ラウンド検査ビュー（NPZ直読み）")

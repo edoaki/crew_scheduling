@@ -155,9 +155,10 @@ def build_diamond_figure(
                 fig.add_trace(go.Scatter(
                     x=xs, y=ys, mode="lines",
                     line=dict(width=2, dash="dot", color=clr),
-                    hoverinfo="skip",
+                    hovertemplate=f"turnback ({sv})<extra></extra>",
                     showlegend=False,
                 ))
+
 
     # 出庫/収納マーカー（黒固定）
     if start_x:
@@ -209,10 +210,10 @@ def build_diamond_figure(
     )
 
     height = 80 * len(station_order) + 120
-    width = 1200
+    width = 2000
     fig.update_layout(
         hovermode="closest",   # 近い1件だけ
-        hoverdistance=15,
+        hoverdistance=20,
         dragmode="pan",
         margin=dict(l=60, r=20, t=40, b=60),
         width=width, height=height,
@@ -220,3 +221,4 @@ def build_diamond_figure(
         uirevision=True,
     )
     return fig
+    

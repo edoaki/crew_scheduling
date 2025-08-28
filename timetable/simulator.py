@@ -254,10 +254,7 @@ def save_timetable_npz(rows: List[TimetableRow], path: str) -> None:
 def generate_timetable(
     station_yaml_path: str,
     train_yaml_path: str,
-    sim_start_hhmm: str = "04:00",
-    sim_end_hhmm: str = "25:00",
     seed: Optional[int] = None,
-    save_path: Optional[str] = None
 ) -> List[TimetableRow]:
     station_raw, train_raw = load_configs(station_yaml_path, train_yaml_path)
     network = build_network(station_raw)
@@ -265,6 +262,9 @@ def generate_timetable(
     rng = random.Random(seed if seed is not None else 1234)
 
     tokens = make_tokens_from_config(train_raw)
+
+    sim_start_hhmm = station_raw["sim_start"]
+    sim_end_hhmm = station_raw["sim_end"]
 
     start = parse_time_hhmm(sim_start_hhmm)
     end = parse_time_hhmm(sim_end_hhmm)
@@ -280,6 +280,4 @@ def generate_timetable(
         step_one_train(ctx, train_id)
 
     rows = ctx.recorder.to_sorted()
-    if save_path:
-        save_timetable_npz(rows, save_path)
     return rows

@@ -16,8 +16,9 @@ with st.sidebar:
     if st.button("生成", type="primary"):
         station_yaml = str(CONFIG_DIR / "station.yaml")
         train_yaml = str(CONFIG_DIR / "train.yaml")
+        constraints_yaml = str(CONFIG_DIR / "constraints.yaml")
         out_path = str(DATA_DIR / f"{out_name}.npz")
-        ok, msg = generate_and_save(station_yaml, train_yaml, out_path)
+        ok, msg = generate_and_save(station_yaml, train_yaml,constraints_yaml,out_path)
         if ok:
             st.success(f"生成しました: {out_path}")
         else:

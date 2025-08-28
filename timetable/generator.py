@@ -121,10 +121,10 @@ def _build_round_from_round_id(round_id: np.ndarray, depart_time: np.ndarray) ->
 def generate_and_save(
     station_yaml: str,
     train_yaml: str,
+    constraints_yaml : str,
     out_npz: str,
     *,
     seed: Optional[int] = None,
-    constraints_yaml: Optional[str] = None,
 ) -> Tuple[bool, str]:
     """
     timetable生成の全体管理:
@@ -144,7 +144,6 @@ def generate_and_save(
         rows = generate_timetable(
             station_yaml_path=station_yaml,
             train_yaml_path=train_yaml,
-            save_path=None,
             seed=seed,
         )
         if rows is None:
