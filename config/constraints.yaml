@@ -1,3 +1,5 @@
+# constraints.yaml
+
 # 単位はすべて「分」
 board_min: 5               # 乗るのにかかる最低時間
 post_hitch_ready_min: 15   # 便乗後に乗務できる最低時間

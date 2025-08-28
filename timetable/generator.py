@@ -2,6 +2,10 @@ from __future__ import annotations
 from typing import Tuple, Dict, Any, List
 from pathlib import Path
 import numpy as np
+from typing import Optional
+from timetable.simulator import generate_timetable  # fallback
+from timetable.task_station_cache import load_constraints_yaml
+from timetable.round_features import build_round_features
 
 def _to_minutes(x):
     # int or "HH:MM"
@@ -49,17 +53,15 @@ def _rows_to_tt_arrays(rows: List[dict]) -> Tuple[Dict[str, np.ndarray], List[st
         dep_time[i] = _to_minutes(str(get(r, "depart_time")))
         arr_time[i] = _to_minutes(str(get(r, "arrive_time")))
 
-    # 駅ラベル語彙
-    station_label_vocab: List[str] = []
-    index: Dict[str, int] = {}
-    for lab in dep_raw + arr_raw:
-        if lab not in index:
-            index[lab] = len(station_label_vocab)
-            station_label_vocab.append(lab)
+    # 駅ラベル語彙（アルファベット順など固定順）
+    unique_labels = sorted(set(dep_raw) | set(arr_raw))  # 例: ['A','B','C',...]
+    station_label_vocab: List[str] = list(unique_labels)
+    index: Dict[str, int] = {lab: i for i, lab in enumerate(station_label_vocab)}
 
     # エンコード
     depart_station = np.asarray([index[s] for s in dep_raw], dtype=np.int32)
     arrive_station = np.asarray([index[s] for s in arr_raw], dtype=np.int32)
+
 
     # 文字列列は固定長Unicodeで保存（allow_pickle不要にする）
     train_ids = np.array(train_ids_list, dtype=np.str_)
@@ -121,11 +123,8 @@ def generate_and_save(
     train_yaml: str,
     out_npz: str,
     *,
-    board_min: int = 2,
-    post_hitch_ready_min: int = 5,
-    max_hops: int = 2,
-    window_min: int = 120,
-    seed: int | None = None
+    seed: Optional[int] = None,
+    constraints_yaml: Optional[str] = None,
 ) -> Tuple[bool, str]:
     """
     timetable生成の全体管理:
@@ -133,12 +132,13 @@ def generate_and_save(
       2) time_table.round_features.build_round_features で round_id 等を算出
       3) time_table.task_station_cache.build_task_station_cache で task×station キャッシュを算出
       4) io_npz.save_timetable_bundle で単一NPZ保存
+
+    board_min / post_hitch_ready_min / max_hops / window_min は
+    constraints.yaml（--constraints）で与える。
+    未指定キーは従来デフォルトにフォールバックする。
     """
     # 1) rows 生成
-   
-        
-    from timetable.simulator import generate_timetable  # fallback
-   
+    
 
     try:
         rows = generate_timetable(
@@ -154,6 +154,23 @@ def generate_and_save(
     except Exception as e:
         return False, f"生成中エラー: {e}"
 
+    # constraints（YAML指定のみ／個別引数なし）
+    DEFAULTS = {
+        "board_min": 2,
+        "post_hitch_ready_min": 5,
+        "max_hops": 2,
+        "window_min": 120,
+    }
+    conf = DEFAULTS.copy()
+    try:
+        
+        raw = load_constraints_yaml(constraints_yaml)
+        for k in DEFAULTS.keys():
+            if k in raw and raw[k] is not None:
+                conf[k] = int(raw[k])
+    except Exception as e:
+        return False, f"constraints 読込エラー: {e}"
+
     # rows -> tt/*（駅ラベルを語彙化）
     try:
         tt, station_label_vocab = _rows_to_tt_arrays(rows)
@@ -163,7 +180,6 @@ def generate_and_save(
     num_stations = len(station_label_vocab)
 
     # 2) round
-    from timetable.round_features import build_round_features
     
     round_id, round_lock_task_ids, round_lock_ptr = build_round_features(
         dep_station=tt["depart_station"],
@@ -173,7 +189,6 @@ def generate_and_save(
         num_stations=num_stations,
     )
     round_arrays = _build_round_from_round_id(round_id, tt["depart_time"])
-    
 
     # 3) feat（task×station）
     features: Dict[str, np.ndarray] = {}
@@ -193,11 +208,11 @@ def generate_and_save(
             dep_time=tt["depart_time"],
             arr_station=tt["arrive_station"],
             arr_time=tt["arrive_time"],
-            board_min=board_min,
-            post_hitch_ready_min=post_hitch_ready_min,
+            board_min=int(conf["board_min"]),
+            post_hitch_ready_min=int(conf["post_hitch_ready_min"]),
             num_stations=num_stations,
-            max_hops=max_hops,
-            window_min=window_min,
+            max_hops=int(conf["max_hops"]),
+            window_min=int(conf["window_min"]),
         )
         features.update(dict(
             cache_task_ptr=cache_task_ptr,
@@ -216,37 +231,37 @@ def generate_and_save(
     meta: Dict[str, Any] = dict(
         format="bundle_v1",
         num_stations=num_stations,
-        board_min=int(board_min),
-        post_hitch_ready_min=int(post_hitch_ready_min),
-        max_hops=int(max_hops),
-        window_min=int(window_min),
+        board_min=int(conf["board_min"]),
+        post_hitch_ready_min=int(conf["post_hitch_ready_min"]),
+        max_hops=int(conf["max_hops"]),
+        window_min=int(conf["window_min"]),
         seed=int(seed) if seed is not None else None,
         source_config=dict(station_yaml=str(station_yaml), train_yaml=str(train_yaml)),
-        station_label_vocab=station_label_vocab,  # 復元用
+        station_label_vocab=station_label_vocab,
     )
+    if constraints_yaml:
+        meta["source_constraints_yaml"] = str(constraints_yaml)
 
     # 5) 保存
     from .io_npz import save_timetable_bundle
     Path(out_npz).parent.mkdir(parents=True, exist_ok=True)
 
-    # 駅ID(0..S-1) → 駅ラベル（例 'A','B',...）に変換して保存する
     id2lab = np.array(station_label_vocab, dtype=np.str_)
     tt_save = tt.copy()
     tt_save["depart_station"] = id2lab[tt["depart_station"]]
     tt_save["arrive_station"] = id2lab[tt["arrive_station"]]
 
-    # topology も一緒に保存（可視化側がこれを station_order に使える）
     save_timetable_bundle(
         out_path=out_npz,
         tt_arrays=tt_save,
         meta=meta,
         features=features,
         round_arrays=round_arrays,
-        topology=id2lab,  # ←追加
+        topology=id2lab,
     )
 
-
     return True, f"保存完了: {out_npz} (rows={tt['depart_time'].shape[0]})"
+
 
 if __name__ == "__main__":
     import argparse

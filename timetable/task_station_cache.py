@@ -2,6 +2,25 @@ from __future__ import annotations
 from typing import Tuple
 import numpy as np
 
+import yaml
+
+
+def load_constraints_yaml(path: str) -> dict:
+    """
+    constraints.yaml を読み込み dict を返す。
+    期待キー:
+      - board_min
+      - post_hitch_ready_min
+      - max_hops
+      - window_min
+    """
+    with open(path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    if not isinstance(raw, dict):
+        raise ValueError("constraints.yaml は辞書形式を想定しています")
+    return raw
+
+
 def build_task_station_cache(
     *,
     dep_station: np.ndarray,   # [N] int

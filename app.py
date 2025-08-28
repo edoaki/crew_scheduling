@@ -23,7 +23,6 @@ with st.sidebar:
         else:
             st.error(f"生成に失敗: {msg}")
 
-
 st.sidebar.markdown(
     """
     <style>
