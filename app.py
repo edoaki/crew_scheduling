@@ -2,6 +2,7 @@ import streamlit as st
 from pathlib import Path
 from timetable.generator import generate_and_save
 from viz.plot import build_diamond_figure
+from viz.plot_core import hhmm
 from utils.io_npz import load_timetable_bundle ,station_order_from_config
 from streamlit_plotly_events import plotly_events
 import numpy as np
@@ -60,36 +61,6 @@ fig = build_diamond_figure(
     station_order=station_order,
     visible_trains=set(selected),
 )
-
-# ---- クリック対応 + cache 表示 + ラウンド指定 UI ----
-
-def _hhmm_to_min(s: str) -> int:
-    try:
-        h, m = s.split(":")
-        return int(h) * 60 + int(m)
-    except Exception:
-        return -1
-
-def _find_task_index_from_click(cd, tt_dict) -> int | None:
-    """
-    plotly の customdata から (depart_station, arrive_station, depart_time, arrive_time) を復元し、
-    tt の該当タスク index(0始まり) を特定する。
-    customdata 仕様（plot.py より）:
-      cd = (train_id, u, v, depart_hhmm, arrive_hhmm, service, direction)
-    """
-    try:
-        u = int(cd[1]); v = int(cd[2])
-        dt = _hhmm_to_min(cd[3]); at = _hhmm_to_min(cd[4])
-
-        ds = np.asarray(tt_dict["depart_station"]).astype(int)
-        as_ = np.asarray(tt_dict["arrive_station"]).astype(int)
-        dtm = np.asarray(tt_dict["depart_time"]).astype(int)
-        atm = np.asarray(tt_dict["arrive_time"]).astype(int)
-
-        idxs = np.where((ds == u) & (as_ == v) & (dtm == dt) & (atm == at))[0]
-        return int(idxs[0]) if idxs.size > 0 else None
-    except Exception:
-        return None
 
 # ---- 図表示（クリック取得） ----
 try:
@@ -153,7 +124,7 @@ with st.container():
             st.stop()
 
         task_idx = int(cd[0])  # 0始まり
-        st.write(f"task_id: {task_idx}")
+        st.write(f"task_id: {task_idx + 1}")
 
         # 以降は既存の cache 表示ロジック（そのまま）
         req_keys = [
