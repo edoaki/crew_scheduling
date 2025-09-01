@@ -239,23 +239,84 @@ def step_one_train(ctx: SimContext, train_id: str) -> None:
         heapq.heappush(ctx.ready, (train.next_action_time, train.id))
 
 
-def save_timetable_npz(rows: List[TimetableRow], path: str) -> None:
-    train_ids = np.array([r.train_id for r in rows])
-    dep_st = np.array([r.depart_station for r in rows])
-    arr_st = np.array([r.arrive_station for r in rows])
-    dep_t = np.array([r.depart_time for r in rows], dtype=np.int32)
-    arr_t = np.array([r.arrive_time for r in rows], dtype=np.int32)
-    service = np.array([r.service.value for r in rows])
-    direction = np.array([r.direction.value for r in rows])
-    np.savez(path, train_ids=train_ids, depart_station=dep_st, arrive_station=arr_st,
-             depart_time=dep_t, arrive_time=arr_t, service=service, direction=direction)
+def _to_minutes(x):
+    # int or "HH:MM"
+    if isinstance(x, (int, np.integer)):
+        return int(x)
+    if isinstance(x, str):
+        x = x.strip()
+        if ":" in x:
+            hh, mm = x.split(":")
+            return int(hh) * 60 + int(mm)
+        # 万一 "530" のような文字数値が来た場合
+        if x.isdigit():
+            return int(x)
+    raise TypeError(f"Unsupported time type: {type(x)} / value={x}")
+
+def _rows_to_tt_arrays(rows: List[dict]) -> Tuple[Dict[str, np.ndarray], List[str]]:
+    def get(r, k):
+        if isinstance(r, dict):
+            return r.get(k)
+        return getattr(r, k)
+
+    N = len(rows)
+
+    # まずはPythonリストに集めてから、最後に np.str_ 固定長Unicode配列へ変換
+    train_ids_list: List[str] = []
+    service_list: List[str] = []
+    direction_list: List[str] = []
+
+    dep_raw: List[str] = []
+    arr_raw: List[str] = []
+
+    dep_time = np.empty(N, dtype=np.int32)
+    arr_time = np.empty(N, dtype=np.int32)
+
+    for i, r in enumerate(rows):
+        train_ids_list.append(str(get(r, "train_id")))
+        service_list.append(str(get(r, "service")))
+        direction_list.append(str(get(r, "direction")))
+
+        ds = get(r, "depart_station")
+        as_ = get(r, "arrive_station")
+        dep_raw.append(str(ds))
+        arr_raw.append(str(as_))
+
+        dep_time[i] = _to_minutes(str(get(r, "depart_time")))
+        arr_time[i] = _to_minutes(str(get(r, "arrive_time")))
+
+    # 駅ラベル語彙（アルファベット順など固定順）
+    unique_labels = sorted(set(dep_raw) | set(arr_raw))  # 例: ['A','B','C',...]
+    station_label_vocab: List[str] = list(unique_labels)
+    index: Dict[str, int] = {lab: i for i, lab in enumerate(station_label_vocab)}
+
+    # エンコード
+    depart_station = np.asarray([index[s] for s in dep_raw], dtype=np.int32)
+    arrive_station = np.asarray([index[s] for s in arr_raw], dtype=np.int32)
+
+
+    # 文字列列は固定長Unicodeで保存（allow_pickle不要にする）
+    train_ids = np.array(train_ids_list, dtype=np.str_)
+    service = np.array(service_list, dtype=np.str_)
+    direction = np.array(direction_list, dtype=np.str_)
+
+    tt = dict(
+        train_ids=train_ids,
+        depart_station=depart_station,
+        arrive_station=arrive_station,
+        depart_time=dep_time,
+        arrive_time=arr_time,
+        service=service,
+        direction=direction,
+    )
+    return tt, station_label_vocab
 
 
 def generate_timetable(
     station_yaml_path: str,
     train_yaml_path: str,
     seed: Optional[int] = None,
-) -> List[TimetableRow]:
+):
     station_raw, train_raw = load_configs(station_yaml_path, train_yaml_path)
     network = build_network(station_raw)
     params = build_params(station_raw, train_raw)
@@ -280,4 +341,6 @@ def generate_timetable(
         step_one_train(ctx, train_id)
 
     rows = ctx.recorder.to_sorted()
-    return rows
+    tt ,station_label_vocab = _rows_to_tt_arrays(rows)
+
+    return tt ,station_label_vocab

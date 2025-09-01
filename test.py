@@ -13,9 +13,3 @@ constraints_yaml = str(CONFIG_DIR / "constraints.yaml")
 out_path = str(DATA_DIR / f"timetable.npz")
 ok, msg = generate_and_save(station_yaml, train_yaml,constraints_yaml,out_path)
 
-tt, meta, task_station_cache,  rounds = load_timetable_bundle(str(DATA_DIR /"timetable.npz"))
-
-print("tt keys:", list(tt.keys()))
-print("meta keys:", list(meta.keys()))
-print("task_station_cache keys:", list(task_station_cache.keys()))
-print("rounds keys:", list(rounds.keys()))

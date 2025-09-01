@@ -1,6 +1,6 @@
 from __future__ import annotations
-from typing import Tuple
 import numpy as np
+from typing import Tuple, Dict
 
 import yaml
 
@@ -50,6 +50,8 @@ def build_task_station_cache(
       cache_path_ptr       : [K+1]        int32   便乗タスク列の開始位置
       cache_path_task_ids  : [P]          int32   便乗タスクID（1始まり）
     """
+    task_station_cache: Dict[str, np.ndarray] = {}
+    
     N = int(dep_time.shape[0])
     S = int(num_stations)
 
@@ -166,13 +168,15 @@ def build_task_station_cache(
     cache_path_ptr = np.asarray(path_ptr, dtype=np.int32)
     cache_path_task_ids = np.asarray(path_ids, dtype=np.int32)
 
-    return (
-        cache_task_ptr,
-        cache_station_ids,
-        cache_must_be_by_min,
-        cache_is_hitch,
-        cache_hops,
-        cache_hitch_minutes,
-        cache_path_ptr,
-        cache_path_task_ids,
-    )
+    task_station_cache.update(dict(
+            cache_task_ptr=cache_task_ptr,
+            cache_station_ids=cache_station_ids,
+            cache_must_be_by_min=cache_must_be_by_min,
+            cache_is_hitch=cache_is_hitch,
+            cache_hops=cache_hops,
+            cache_hitch_minutes=cache_hitch_minutes,
+            cache_path_ptr=cache_path_ptr,
+            cache_path_task_ids=cache_path_task_ids,
+        ))
+
+    return task_station_cache

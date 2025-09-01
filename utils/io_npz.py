@@ -1,3 +1,67 @@
+"""
+io_npz.py で読み書きする「単一NPZバンドル」の仕様まとめ（詳細）
+
+このモジュールは、時刻表データ・付随メタ情報・round情報・task×stationキャッシュを
+1つの .npz にまとめて保存／読み出しします。
+
+【保存される名前空間と内容（キーの接頭辞）】
+- "tt/<name>": 時刻表の各カラム（配列）
+    - "train_ids"     : shape [M], dtype=str (np.str_)        列車ID
+    - "depart_station": shape [M], dtype=str (ラベル保存時)    出発駅ラベル
+    - "arrive_station": shape [M], dtype=str (ラベル保存時)    到着駅ラベル
+    - "depart_time"   : shape [M], dtype=int32                 出発時刻（分）
+    - "arrive_time"   : shape [M], dtype=int32                 到着時刻（分）
+    - "service"       : shape [M], dtype=str                   種別
+    - "direction"     : shape [M], dtype=str                   方位
+  ※保存時は object 配列を固定長Unicodeへ変換します（読み込み時 allow_pickle=False でも復元可）。
+
+- "meta/json": メタ情報（JSONをUTF-8バイト列にして格納）
+    代表例:
+      {
+        "format": "bundle_v1",
+        "num_stations": S,
+        "board_min": int,
+        "post_hitch_ready_min": int,
+        "max_hops": int,
+        "window_min": int,
+        "seed": Optional[int],
+        "source_config": {"station_yaml": "...", "train_yaml": "..."},
+        "station_label_vocab": [駅ラベル文字列...],
+        "source_constraints_yaml": Optional[str]
+      }
+
+- "round/<name>": ラウンド情報（round_id から構築した最小集合）
+    - "round_ptr"       : shape [R+1], int32
+    - "round_tt_idx"    : shape [M],   int32   （tt配列に対するインデックス）
+    - "round_anchor_min": shape [R],   int32   （各ラウンドの基準時刻 = そのラウンド内の最小 depart_time）
+  ※「ラウンド」は depart_time の昇順＋到着最早時刻によるゲーティングで付与されます。
+    使い方例は load_timetable_bundle の docstring を参照。
+
+
+- "task_station_cache/<name>": タスク×駅キャッシュ（便乗探索結果を含む）
+    - "cache_task_ptr"       : shape [N+1], int32  タスクごとの開始位置（0-based）
+    - "cache_station_ids"    : shape [K],   int32  flattenされた駅ID（0..S-1）
+    - "cache_must_be_by_min" : shape [K],   int32  その駅に「この分までに居れば可」
+    - "cache_is_hitch"       : shape [K],   uint8  0/1 便乗を使った到達か
+    - "cache_hops"           : shape [K],   int16  便乗本数
+    - "cache_hitch_minutes"  : shape [K],   int32  便乗合計所要（分）
+    - "cache_path_ptr"       : shape [K+1], int32  便乗タスク列の開始位置
+    - "cache_path_task_ids"  : shape [P],   int32  便乗タスクID（※1始まり）
+  ※各タスク t（0<=t<N）について、該当区間は
+       a = cache_task_ptr[t], b = cache_task_ptr[t+1]
+       i ∈ [a, b) がそのタスクの候補駅のスライス。
+    候補 i ごとの便乗列は
+       u = cache_path_ptr[i], v = cache_path_ptr[i+1]
+       cache_path_task_ids[u:v] が 1始まりのタスクID列（元の tt 配列の 0始まりに合わせるなら -1 する）。
+
+- "topology": Optional[shape [S], dtype=str]
+    駅ラベル配列（ID→ラベルの対応を持つ）。保存時に渡された場合のみ含まれます。
+
+【読み出し時のキー変換】
+- load_timetable_bundle(strip_namespace=True) では、
+  "tt/", "round/", "task_station_cache/" の接頭辞を取り除いた dict に整形して返します。
+"""
+
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 from typing import Dict, Any, Optional
@@ -60,7 +124,7 @@ def save_timetable_bundle(
             meta_bytes = b"{}"
         save_dict["meta/json"] = np.frombuffer(meta_bytes, dtype=np.uint8)
     
-    # features / round は数値想定だが一応object回避
+    # task_station_cache / round は数値想定だが一応object回避
     if task_station_cache:
         for k, v in task_station_cache.items():
             arr = np.asarray(v)
@@ -106,7 +170,7 @@ def _extract_npz(z, sanitize_object: bool) -> Dict[str, Any]:
         except Exception:
             meta = {}
 
-    # features
+    # task_station_cache
     task_station_cache = {}
     for k in keys:
         if k.startswith("task_station_cache/"):

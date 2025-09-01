@@ -93,7 +93,45 @@ def build_round_cache   (
         flat.extend(b)
         ptr.append(len(flat))
 
-    round_lock_task_ids = np.asarray(flat, dtype=np.int32)
-    round_lock_ptr = np.asarray(ptr, dtype=np.int32)
+    round_arrays = _build_round_from_round_id(round_id,dep_time)
+    
+    return round_arrays 
 
-    return round_id.astype(np.int32), round_lock_task_ids, round_lock_ptr
+
+def _build_round_from_round_id(round_id: np.ndarray, depart_time: np.ndarray) :
+    """
+    round_id: shape [N] 1-based. Groups are 1..R.
+    depart_time: shape [N] minutes.
+
+    Returns:
+      {"round_ptr":[R+1], "round_tt_idx":[sum], "round_anchor_min":[R]}
+    """
+    if round_id.size == 0:
+        return dict(round_ptr=np.asarray([0], dtype=np.int32),
+                    round_tt_idx=np.asarray([], dtype=np.int32),
+                    round_anchor_min=np.asarray([], dtype=np.int32))
+    rid = np.asarray(round_id, dtype=np.int64)
+    N = rid.shape[0]
+    idx = np.arange(N, dtype=np.int64)
+    order = np.lexsort((idx, depart_time, rid))
+    rid_sorted = rid[order]; tt_idx_sorted = idx[order]
+
+    ptr = [0]; anchor = []; flat = []
+    cur = rid_sorted[0]; start = 0
+    for i in range(N):
+        if rid_sorted[i] != cur:
+            group_idx = tt_idx_sorted[start:i]
+            flat.extend(group_idx.tolist())
+            anchor.append(int(depart_time[group_idx].min()))
+            ptr.append(len(flat))
+            cur = rid_sorted[i]; start = i
+    group_idx = tt_idx_sorted[start:N]
+    flat.extend(group_idx.tolist())
+    anchor.append(int(depart_time[group_idx].min()))
+    ptr.append(len(flat))
+
+    return dict(
+        round_ptr=np.asarray(ptr, dtype=np.int32),
+        round_tt_idx=np.asarray(flat, dtype=np.int32),
+        round_anchor_min=np.asarray(anchor, dtype=np.int32),
+    )
