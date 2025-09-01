@@ -5,7 +5,7 @@ import numpy as np
 from typing import Optional
 from timetable.simulator import generate_timetable  # fallback
 from timetable.task_station_cache import load_constraints_yaml
-from timetable.round_features import build_round_features
+from timetable.round_cache import build_round_cache
 
 def _to_minutes(x):
     # int or "HH:MM"
@@ -129,7 +129,7 @@ def generate_and_save(
     """
     timetable生成の全体管理:
       1) simulator.generate_timetable で rows 生成（保存しない）
-      2) time_table.round_features.build_round_features で round_id 等を算出
+      2) time_table.round_cache.build_round_cache で round_id 等を算出
       3) time_table.task_station_cache.build_task_station_cache で task×station キャッシュを算出
       4) io_npz.save_timetable_bundle で単一NPZ保存
 
@@ -180,7 +180,7 @@ def generate_and_save(
 
     # 2) round
     
-    round_id, round_lock_task_ids, round_lock_ptr = build_round_features(
+    round_id, round_lock_task_ids, round_lock_ptr = build_round_cache(
         dep_station=tt["depart_station"],
         dep_time=tt["depart_time"],
         arr_station=tt["arrive_station"],
@@ -189,8 +189,8 @@ def generate_and_save(
     )
     round_arrays = _build_round_from_round_id(round_id, tt["depart_time"])
 
-    # 3) feat（task×station）
-    features: Dict[str, np.ndarray] = {}
+    # 3) cache（task×station）
+    task_station_cache: Dict[str, np.ndarray] = {}
     try:
         from timetable.task_station_cache import build_task_station_cache
         (
@@ -213,7 +213,7 @@ def generate_and_save(
             max_hops=int(conf["max_hops"]),
             window_min=int(conf["window_min"]),
         )
-        features.update(dict(
+        task_station_cache.update(dict(
             cache_task_ptr=cache_task_ptr,
             cache_station_ids=cache_station_ids,
             cache_must_be_by_min=cache_must_be_by_min,
@@ -242,7 +242,7 @@ def generate_and_save(
         meta["source_constraints_yaml"] = str(constraints_yaml)
 
     # 5) 保存
-    from .io_npz import save_timetable_bundle
+    from utils.io_npz import save_timetable_bundle
     Path(out_npz).parent.mkdir(parents=True, exist_ok=True)
 
     id2lab = np.array(station_label_vocab, dtype=np.str_)
@@ -254,7 +254,7 @@ def generate_and_save(
         out_path=out_npz,
         tt_arrays=tt_save,
         meta=meta,
-        features=features,
+        task_station_cache=task_station_cache,
         round_arrays=round_arrays,
         topology=id2lab,
     )
@@ -267,20 +267,13 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--station", required=True)
     p.add_argument("--train", required=True)
+    p.add_argument("--constraints", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--seed", type=int, default=None)
-    p.add_argument("--board_min", type=int, default=2)
-    p.add_argument("--post_hitch_ready_min", type=int, default=5)
-    p.add_argument("--max_hops", type=int, default=2)
-    p.add_argument("--window_min", type=int, default=120)
     a = p.parse_args()
 
     ok, msg = generate_and_save(
-        a.station, a.train, a.out,
-        board_min=a.board_min,
-        post_hitch_ready_min=a.post_hitch_ready_min,
-        max_hops=a.max_hops,
-        window_min=a.window_min,
+        a.station, a.train, a.constraints,a.out,
         seed=a.seed
     )
     print(("OK " if ok else "NG ") + msg)

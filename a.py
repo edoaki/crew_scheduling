@@ -44,9 +44,14 @@ if not npz_files:
     st.stop()
 
 sel_name = st.selectbox("表示するNPZを選択", [p.name for p in npz_files], index=0)
-tt, meta, task_station_cache,  rounds = load_timetable_bundle(str(DATA_DIR / sel_name))
+bundle = load_timetable_bundle(str(DATA_DIR / sel_name))
 
-if not rounds or "round_ptr" not in rounds or "round_tt_idx" not in rounds:
+tt = bundle["tt"]
+rd = bundle.get("round", {})
+feat = bundle.get("features", {})
+meta = bundle.get("meta", {})
+
+if not rd or "round_ptr" not in rd or "round_tt_idx" not in rd:
     st.error("このNPZには round 情報が含まれていません（round_ptr / round_tt_idx が無い）。")
     st.stop()
 
@@ -63,9 +68,9 @@ def lab(i: int) -> str:
     return str(i)
 
 # Round 基本配列
-r_ptr = rounds["round_ptr"]           # [R+1]
-r_flat = rounds["round_tt_idx"]       # [*] 0始まりのttインデックス
-r_anchor = rounds.get("round_anchor_min", None)  # [R] minutes
+r_ptr = rd["round_ptr"]           # [R+1]
+r_flat = rd["round_tt_idx"]       # [*] 0始まりのttインデックス
+r_anchor = rd.get("round_anchor_min", None)  # [R] minutes
 
 R = int(r_ptr.shape[0] - 1)
 st.write(f"ラウンド数: **{R}**")
@@ -127,18 +132,18 @@ req_keys = [
     "cache_is_hitch","cache_hops","cache_hitch_minutes",
     "cache_path_ptr","cache_path_task_ids"
 ]
-missing = [k for k in req_keys if k not in task_station_cache]
+missing = [k for k in req_keys if k not in feat]
 if missing:
     st.warning(f"feat に必要なキーが見つかりません: {missing}")
 else:
-    tptr = task_station_cache["cache_task_ptr"].astype(int)       # [N+1]
-    st_ids = task_station_cache["cache_station_ids"].astype(int)  # [K]
-    must = task_station_cache["cache_must_be_by_min"].astype(int) # [K]
-    hitch = task_station_cache["cache_is_hitch"].astype(int)      # [K]
-    hops = task_station_cache["cache_hops"].astype(int)           # [K]
-    hmin = task_station_cache["cache_hitch_minutes"].astype(int)  # [K]
-    pptr = task_station_cache["cache_path_ptr"].astype(int)       # [K+1]
-    pids = task_station_cache["cache_path_task_ids"].astype(int)  # [P] 1始まりの便乗タスクID
+    tptr = feat["cache_task_ptr"].astype(int)       # [N+1]
+    st_ids = feat["cache_station_ids"].astype(int)  # [K]
+    must = feat["cache_must_be_by_min"].astype(int) # [K]
+    hitch = feat["cache_is_hitch"].astype(int)      # [K]
+    hops = feat["cache_hops"].astype(int)           # [K]
+    hmin = feat["cache_hitch_minutes"].astype(int)  # [K]
+    pptr = feat["cache_path_ptr"].astype(int)       # [K+1]
+    pids = feat["cache_path_task_ids"].astype(int)  # [P] 1始まりの便乗タスクID
 
     st.subheader("タスク×駅ごとの便乗情報")
     for t0 in idxs:  # 0-based

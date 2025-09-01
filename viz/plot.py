@@ -12,6 +12,15 @@ from .plot_core import (
     detect_turnbacks, add_cap_arc_buffer, is_turnback_pair,
 )
 
+def _extend_with_cd(x_points, y_points, cd_tuple, xs, ys, cds, add_none=True):
+    # x_points, y_points: 実点（Noneを含めない）
+    # cd_tuple: クリック時に拾いたい情報（ここでは tt の 0始まり index など）
+    xs.extend(x_points)
+    ys.extend(y_points)
+    cds.extend([cd_tuple] * len(x_points))
+    if add_none:
+        xs.append(None); ys.append(None); cds.append(None)
+
 def build_diamond_figure(
     data: Dict[str, Any],
     station_order: List[str],
@@ -61,27 +70,37 @@ def build_diamond_figure(
         # 区間ごとに service を見て、local/rapid で別トレース（停車もつなぐ）
         xs_local: List = []; ys_local: List = []; cd_local: List = []
         xs_rapid: List = []; ys_rapid: List = []; cd_rapid: List = []
+        xs_dw_local: List = []; ys_dw_local: List = []; cd_dw_local: List = []
+        xs_dw_rapid: List = []; ys_dw_rapid: List = []; cd_dw_rapid: List = []
 
         for k, i in enumerate(idxs):
             dt, at = int(data["depart_time"][i]), int(data["arrive_time"][i])
             u, v = str(data["depart_station"][i]), str(data["arrive_station"][i])
-            sv = service_key(data["service"][i]) if "service" in data else "local"
+            sv = service_key(data["service"][i])  
             yu, yv = st2y[u], st2y[v]
             mid = dt + (at - dt) / 2.0
             ym = yu + (yv - yu) / 2.0
 
-            xs_seg = [base + timedelta(minutes=dt), base + timedelta(minutes=mid), base + timedelta(minutes=at), None]
-            ys_seg = [yu, ym, yv, None]
-            cd_seg = [(
-                tid, u, v, hhmm(dt), hhmm(at),
-                str(data["service"][i]) if "service" in data else "local",
-                str(data.get("direction", ["None"])[i]) if "direction" in data else "None",
-            )] * 3 + [("", "", "", "", "", "", "")]
+            # 例: タスク i の (u -> v) 区間（出発 dt 分 -> 到着 at 分）、中点 mid 分
+            x_seg = [base + timedelta(minutes=dt),
+                    base + timedelta(minutes=mid),
+                    base + timedelta(minutes=at)]
+            y_seg = [yu, ym, yv]
 
-            if sv == "rapid":
-                xs_rapid += xs_seg; ys_rapid += ys_seg; cd_rapid += cd_seg
+            cd_seg = [
+                int(i),                                  # tt の 0始まり index
+                str(tid),                                # train_id は文字列で統一
+                str(u), str(v),                          # 駅IDは文字列化しておくと安全
+                hhmm(int(dt)), hhmm(int(at)),            # 時刻は "HH:MM" 文字列
+                service_key(data["service"][i]),         # "local" or "rapid"
+                str(data["direction"][i]) if "direction" in data else "None",
+            ]
+
+            if service_key(data["service"][i])   == "local":
+                _extend_with_cd(x_seg, y_seg, cd_seg, xs_local, ys_local, cd_local)
             else:
-                xs_local += xs_seg; ys_local += ys_seg; cd_local += cd_seg
+                _extend_with_cd(x_seg, y_seg, cd_seg, xs_rapid, ys_rapid, cd_rapid)
+
 
             # 停車横線（次区間が折返しでない場合だけ描く）
             if k < len(idxs) - 1:
@@ -91,17 +110,22 @@ def build_diamond_figure(
                     st = str(data["arrive_station"][i])
                     y = st2y[st]
                     sv_next = service_key(data["service"][j]) if "service" in data else "local"
-                    xs_dw = [base + timedelta(minutes=t0), base + timedelta(minutes=t1), None]
-                    ys_dw = [y, y, None]
-                    cd_dw = [(
-                        tid, st, st, hhmm(t0), hhmm(t1),
-                        str(data["service"][j]) if "service" in data else "local",
+                    x_dw = [base + timedelta(minutes=t0),base + timedelta(minutes=t1)]
+                    y_dw = [y, y]
+
+                    cd_dw = (
+                        j,     # 次区間の tt index を持たせるのが運用上便利
+                        tid, st, st,
+                        hhmm(t0), hhmm(t1),
+                        service_key(data["service"][j])  ,
                         str(data.get("direction", ["None"])[j]) if "direction" in data else "None",
-                    )] * 2 + [("", "", "", "", "", "", "")]
-                    if sv_next == "rapid":
-                        xs_rapid += xs_dw; ys_rapid += ys_dw; cd_rapid += cd_dw
+                    )
+
+                    if service_key(data["service"][j]) == "local":
+                        _extend_with_cd(x_dw, y_dw, cd_dw, xs_dw_local, ys_dw_local, cd_dw_local)
                     else:
-                        xs_local += xs_dw; ys_local += ys_dw; cd_local += cd_dw
+                        _extend_with_cd(x_dw, y_dw, cd_dw, xs_dw_rapid, ys_dw_rapid, cd_dw_rapid)
+
 
         # 出庫（○）・収納（△）マーカー位置（黒固定）
         i0, i1 = idxs[0], idxs[-1]
@@ -117,34 +141,35 @@ def build_diamond_figure(
             fig.add_trace(go.Scatter(
                 x=xs_local, y=ys_local, mode="lines",
                 line=dict(width=2, color=COLORS["local_line"]),
-                hovertemplate=(
-                    "train_id=%{customdata[0]}<br>"
-                    "station=%{y}<br>"
-                    "%{customdata[1]}→%{customdata[2]}<br>"
-                    "%{customdata[3]}→%{customdata[4]}<br>"
-                    "service=%{customdata[5]}<br>"
-                    "direction=%{customdata[6]}<extra></extra>"
-                ),
                 customdata=cd_local,
-                name=str(tid),
+                hovertemplate=(
+                    "task_idx=%{customdata[0]}<br>"
+                    "train_id=%{customdata[1]}<br>"
+                    "%{customdata[2]}→%{customdata[3]}<br>"
+                    "%{customdata[4]}→%{customdata[5]}<br>"
+                    "service=%{customdata[6]}<br>"
+                    "direction=%{customdata[7]}<extra></extra>"
+                ),
                 showlegend=False,
             ))
+
+
         if xs_rapid:
             fig.add_trace(go.Scatter(
-                x=xs_rapid, y=ys_rapid, mode="lines",
-                line=dict(width=2, color=COLORS["rapid_line"]),
-                hovertemplate=(
-                    "train_id=%{customdata[0]}<br>"
-                    "station=%{y}<br>"
-                    "%{customdata[1]}→%{customdata[2]}<br>"
-                    "%{customdata[3]}→%{customdata[4]}<br>"
-                    "service=%{customdata[5]}<br>"
-                    "direction=%{customdata[6]}<extra></extra>"
-                ),
-                customdata=cd_rapid,
-                name=str(tid),
-                showlegend=False,
-            ))
+            x=xs_rapid, y=ys_rapid, mode="lines",
+            line=dict(width=2, color=COLORS["rapid_line"]),
+            customdata=cd_rapid,
+            hovertemplate=(
+                "task_idx=%{customdata[0]}<br>"
+                "train_id=%{customdata[1]}<br>"
+                "%{customdata[2]}→%{customdata[3]}<br>"
+                "%{customdata[4]}→%{customdata[5]}<br>"
+                "service=%{customdata[6]}<br>"
+                "direction=%{customdata[7]}<extra></extra>"
+            ),
+            showlegend=False,
+        ))
+
 
     # 折返し（半円）を一括追加（点線）
     for sv in ("local", "rapid"):

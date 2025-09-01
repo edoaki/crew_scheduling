@@ -24,7 +24,7 @@ def save_timetable_bundle(
     out_path: str,
     tt_arrays: Dict[str, np.ndarray],
     meta: Optional[Dict[str, Any]] = None,
-    features: Optional[Dict[str, np.ndarray]] = None,
+    task_station_cache: Optional[Dict[str, np.ndarray]] = None,
     round_arrays: Optional[Dict[str, np.ndarray]] = None,
     topology: Optional[np.ndarray] = None,  # ←追加
 ) -> None:
@@ -32,8 +32,9 @@ def save_timetable_bundle(
     単一NPZ（圧縮）に保存する。
       - 時刻表カラムは 'tt/<name>'
       - メタは 'meta/json'（JSONのUTF-8バイト列）
-      - 追加特徴は 'feat/<name>'
+      
       - ラウンド関連は 'round/<name>'
+      - キャッシュ関連は 'task_station_cache/<name>'
     """
     _ensure_parent_dir(out_path)
     save_dict: Dict[str, Any] = {}
@@ -58,12 +59,13 @@ def save_timetable_bundle(
         except Exception:
             meta_bytes = b"{}"
         save_dict["meta/json"] = np.frombuffer(meta_bytes, dtype=np.uint8)
-
+    
     # features / round は数値想定だが一応object回避
-    if features:
-        for k, v in features.items():
+    if task_station_cache:
+        for k, v in task_station_cache.items():
             arr = np.asarray(v)
-            save_dict[f"feat/{k}"] = _to_unicode_array(arr)
+            save_dict[f"task_station_cache/{k}"] = _to_unicode_array(arr)
+        
     if round_arrays:
         for k, v in round_arrays.items():
             arr = np.asarray(v)
@@ -72,8 +74,17 @@ def save_timetable_bundle(
     if topology is not None:
         save_dict["topology"] = np.asarray(topology, dtype=np.str_)
 
-
     np.savez_compressed(out_path, **save_dict)
+
+def _strip_namespace_prefix(d, namespace):
+    pre = f"{namespace}/"
+    out = {}
+    for k, v in d.items():
+        if isinstance(k, str) and k.startswith(pre):
+            out[k[len(pre):]] = v
+        else:
+            out[k] = v
+    return out
 
 def _extract_npz(z, sanitize_object: bool) -> Dict[str, Any]:
     keys = list(z.keys())
@@ -85,7 +96,7 @@ def _extract_npz(z, sanitize_object: bool) -> Dict[str, Any]:
             arr = z[k]
             if sanitize_object and getattr(arr, "dtype", None) == object:
                 arr = _to_unicode_array(arr)
-            data_tt[k[3:]] = arr
+            data_tt[k] = arr
 
     # meta
     meta = {}
@@ -96,13 +107,13 @@ def _extract_npz(z, sanitize_object: bool) -> Dict[str, Any]:
             meta = {}
 
     # features
-    feats = {}
+    task_station_cache = {}
     for k in keys:
-        if k.startswith("feat/"):
+        if k.startswith("task_station_cache/"):
             arr = z[k]
             if sanitize_object and getattr(arr, "dtype", None) == object:
                 arr = _to_unicode_array(arr)
-            feats[k[5:]] = arr
+            task_station_cache[k] = arr
 
     # round
     rounds = {}
@@ -111,22 +122,38 @@ def _extract_npz(z, sanitize_object: bool) -> Dict[str, Any]:
             arr = z[k]
             if sanitize_object and getattr(arr, "dtype", None) == object:
                 arr = _to_unicode_array(arr)
-            rounds[k[6:]] = arr
+            rounds[k] = arr
 
-    return {"tt": data_tt, "meta": meta, "features": feats, "round": rounds}
+    return data_tt, meta, task_station_cache,  rounds
 
-def load_timetable_bundle(path: str) -> Dict[str, Any]:
+
+def load_timetable_bundle(path: str, strip_namespace: bool = True):
     """
     まず allow_pickle=False で読み、object配列エラーの場合のみ
     allow_pickle=True にフォールバックして文字配列はUnicodeへ変換する。
+    読み出した後、strip_namespace=True なら 'tt/' や 'round/' 等の
+    名前空間プレフィックスを取り除く。
     """
     try:
         with np.load(path, allow_pickle=False) as z:
-            return _extract_npz(z, sanitize_object=False)
+            tt, meta, task_station_cache, rounds = _extract_npz(z, sanitize_object=False)
     except ValueError as e:
         msg = str(e)
         if "Object arrays cannot be loaded" not in msg and "allow_pickle=False" not in msg:
             raise
-    # フォールバック（古いNPZ互換）
-    with np.load(path, allow_pickle=True) as z:
-        return _extract_npz(z, sanitize_object=True)
+        with np.load(path, allow_pickle=True) as z:
+            tt, meta, task_station_cache, rounds = _extract_npz(z, sanitize_object=True)
+
+    if strip_namespace:
+        tt = _strip_namespace_prefix(tt, "tt")
+        rounds = _strip_namespace_prefix(rounds, "round")
+        task_station_cache = _strip_namespace_prefix(task_station_cache, "task_station_cache")
+
+    return tt, meta, task_station_cache, rounds
+
+from typing import Dict, Any, List
+import yaml
+def station_order_from_config(station_yaml_path: str) -> List[str]:
+    with open(station_yaml_path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f)
+    return [s["id"] for s in raw["stations"]]
