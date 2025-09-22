@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 import torch
-from env.state import ActionMask
+from rl_env.state import ActionMask
 from utils.io import ActionProb, Assignment
 
 class BaseAgentHandler:

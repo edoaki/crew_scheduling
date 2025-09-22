@@ -1,7 +1,7 @@
 from utils.yaml_loader import load_yaml
 
-from env.generator import CrewARGenerator ,save_npz,load_npz
-from env.env import CrewAREnv
+from rl_env.generator import CrewARGenerator ,save_npz,load_npz
+from rl_env.env import CrewAREnv
 from pathlib import Path
 import numpy as np
 

@@ -3,7 +3,7 @@ from typing import List, Dict, Any
 from dataclasses import dataclass
 import torch
 import torch.nn as nn
-from env.state import StaticObs, DynamicObs
+from rl_env.state import StaticObs, DynamicObs
 from models.embedding.init_emb import StationEmbedding, TimeFourierEncoding,StaticTokenizerConfig
 
 class CrewStaticTokenizer(nn.Module):
