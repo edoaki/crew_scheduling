@@ -34,14 +34,22 @@ class Policy(nn.Module):
             )
         # まず1stepだけで確認
         cache = self.decoder.pre_decoder_hook(hidden,static_task_mask)
-
+        step = 0
         while not vec_env.done.all().item():
+            print()
+            print(f"----Decoding step {step}")
             logit,action_mask= self.decoder(env_out,cache)
+            print(action_mask)
+            # print("decode logit",logit.shape)
             selected,logprobs = decoding_strategy.step(logit,action_mask,env_out,done)
             env_out,rewards,dones,info = vec_env.step(selected,env_out)
+            step += 1
 
         logprobs = decoding_strategy.post_decoder_hook()
-
+        sol = vec_env.return_solution()
+        print(vec_env.envs[0].static.num_tasks)
+        print(vec_env.envs[1].static.num_tasks)
+        print("solution",sol)
         #報酬の計算
         reward = 0
         logprobs = 0

@@ -99,8 +99,8 @@ class ContextEmbedding(nn.Module):
         local_task_mask = dyns["pad_masks"]["tasks"].to(torch.bool) # [B,w_T]
         
         round_bool = tasks['round_bool'] # [B,w_T]
-        print("round_bool",round_bool.shape)
-        print(round_bool)
+        # print("round_bool",round_bool.shape)
+        # print(round_bool)
         round_idx = round_bool.to(dtype=torch.long)
         round_emb = self.round_embed(round_idx)  # [B, w_T, 1]
 

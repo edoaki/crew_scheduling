@@ -101,12 +101,11 @@ class PointerAttention(nn.Module):
 
         # Batch matrix multiplication to compute logits (batch_size, num_steps, graph_size)
         # bmm is slightly faster than einsum and matmul
-        logits = (torch.bmm(glimpse, logit_key.squeeze(-2).transpose(-2, -1))).squeeze(
-            -2
-        ) / math.sqrt(glimpse.size(-1))
+        logits = torch.bmm(glimpse, logit_key.transpose(-2, -1)) / math.sqrt(glimpse.size(-1))
         if pair_bias is not None:
-            logits = logits 
+            logits = logits + pair_bias
         return logits
+
 
     def _inner_mha(self, query, key, value, attn_mask):
         q = self._make_heads(query)

@@ -12,7 +12,7 @@ class PairMlp(nn.Module):
         )
 
     def forward(self,pair_bias_info):  # feats: [B,C,T,5]
-        print("pair_bias_info in pair emb",pair_bias_info["is_hitch"].shape)
+        # print("pair_bias_info in pair emb",pair_bias_info["is_hitch"].shape)
         feats = self.preprocess_pair_features(pair_bias_info)  # [B,C,T,5]
         x = self.ln(feats)
         pair_bias = self.mlp(x)  # [B,C,T,out_dim]

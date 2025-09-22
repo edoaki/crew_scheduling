@@ -99,9 +99,9 @@ class PARCODecoder(nn.Module):
               mask:   [B, N]
         """
         dyns = out["dyns"]
-        print("window dyns task ",dyns["tasks"]["round_bool"].shape)
-        print("window dyns crew",dyns["crews"]["crew_on_duty"].shape)
-        print()
+        # print("window dyns task ",dyns["tasks"]["round_bool"].shape)
+        # print("window dyns crew",dyns["crews"]["crew_on_duty"].shape)
+        # print()
         # Q / KVL を計算
         crew_context,task_context,crew_mask,task_mask= self.context_embedding(cached,dyns)  
         
@@ -134,6 +134,8 @@ class PARCODecoder(nn.Module):
         # 検証用
         # pointer_maskとmaskは同じはずだから判定 形状だけでなく、中身も全て同じはず
         if pointer_mask.shape != mask.shape or not torch.all(pointer_mask == mask):
+            print("pointer_mask",pointer_mask)
+            print("action_mask",mask)
             raise ValueError("pointer_mask と action_mask が異なります")
 
         pair_bias_info = out["pairs"]
@@ -143,8 +145,7 @@ class PARCODecoder(nn.Module):
 
         # # PointerAttention に渡してロジットを得る
         logits = self.pointer(glimpse_q, glimpse_k, glimpse_v, logit_k,pair_bias,pointer_mask)
-
-
+        # print("logits",logits.shape)
         # print("logits",logits.shape)
         # print(logits)
 
