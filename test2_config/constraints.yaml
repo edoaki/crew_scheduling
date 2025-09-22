@@ -1,8 +1,8 @@
 # constraints.yaml
 
 duty_max_min: 480                 # 最大勤務時間（例: 8時間）
-continuous_drive_max_min: 180     # 休憩なし連続乗務の上限（例:3時間）
-break_min: 30                 # 休憩の最低時間
+continuous_drive_max_min: 100     # 休憩なし連続乗務の上限（例:3時間）
+break_min: 30                     # 休憩の最低時間
 
 dispatch_prep_min: 15             # 出庫準備時間
 stabling_post_min: 15             # 入庫後に勤務可能になる時間

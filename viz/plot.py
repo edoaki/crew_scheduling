@@ -21,8 +21,9 @@ def _extend_with_cd(x_points, y_points, cd_tuple, xs, ys, cds, add_none=True):
     if add_none:
         xs.append(None); ys.append(None); cds.append(None)
 
+
 def build_diamond_figure(
-    data: Dict[str, Any],
+    td: Dict[str, Any],
     station_order: List[str],
     visible_trains: Set[str],
 ) -> go.Figure:
@@ -36,22 +37,33 @@ def build_diamond_figure(
     ・出庫=○、収納=△（黒固定）
     ・ホバーは最も近い1件のみ表示
     """
+    def _station_key(x):
+        try:
+            import torch
+            if hasattr(x, "item"):
+                x = x.item()
+        except Exception:
+            pass
+        import numpy as _np
+        if isinstance(x, (int, _np.integer)):
+            return station_order[int(x)]
+        return str(x)
     base = datetime(1970, 1, 1)
 
-    dep_times = np.asarray(data["depart_time"]).astype(int, copy=False) if len(data["depart_time"]) else np.array([0])
-    arr_times = np.asarray(data["arrive_time"]).astype(int, copy=False) if len(data["arrive_time"]) else np.array([60])
+    dep_times = np.asarray(td["depart_time"]).astype(int, copy=False) if len(td["depart_time"]) else np.array([0])
+    arr_times = np.asarray(td["arrive_time"]).astype(int, copy=False) if len(td["arrive_time"]) else np.array([60])
     tmin = int(dep_times.min()) if dep_times.size else 0
     tmax = int(arr_times.max()) if arr_times.size else 60
     x_min = base + timedelta(minutes=tmin - 5)
     x_max = base + timedelta(minutes=tmax + 5)
 
     # 駅の縦位置（local 所要時間比で内分）
-    st2y = station_positions_by_local_time(station_order, data)
+    st2y = station_positions_by_local_time(station_order, td)
     yvals = [st2y[s] for s in station_order]
     y_top, y_bottom = -0.5, max(yvals) + 0.5
 
     # 列車ごとのインデックス
-    groups = group_by_train(data)
+    groups = group_by_train(td)
 
     fig = go.Figure()
 
@@ -74,9 +86,10 @@ def build_diamond_figure(
         xs_dw_rapid: List = []; ys_dw_rapid: List = []; cd_dw_rapid: List = []
 
         for k, i in enumerate(idxs):
-            dt, at = int(data["depart_time"][i]), int(data["arrive_time"][i])
-            u, v = str(data["depart_station"][i]), str(data["arrive_station"][i])
-            sv = service_key(data["service"][i])  
+            dt, at = int(td["depart_time"][i]), int(td["arrive_time"][i])
+            u = _station_key(td["depart_station"][i])
+            v = _station_key(td["arrive_station"][i])
+            sv = service_key(td["service"][i])
             yu, yv = st2y[u], st2y[v]
             mid = dt + (at - dt) / 2.0
             ym = yu + (yv - yu) / 2.0
@@ -92,11 +105,11 @@ def build_diamond_figure(
                 str(tid),                                # train_id は文字列で統一
                 str(u), str(v),                          # 駅IDは文字列化しておくと安全
                 hhmm(int(dt)), hhmm(int(at)),            # 時刻は "HH:MM" 文字列
-                service_key(data["service"][i]),         # "local" or "rapid"
-                str(data["direction"][i]) if "direction" in data else "None",
+                service_key(td["service"][i]),         # "local" or "rapid"
+                str(td["direction"][i]) if "direction" in td else "None",
             ]
 
-            if service_key(data["service"][i])   == "local":
+            if service_key(td["service"][i])   == "local":
                 _extend_with_cd(x_seg, y_seg, cd_seg, xs_local, ys_local, cd_local)
             else:
                 _extend_with_cd(x_seg, y_seg, cd_seg, xs_rapid, ys_rapid, cd_rapid)
@@ -105,11 +118,12 @@ def build_diamond_figure(
             # 停車横線（次区間が折返しでない場合だけ描く）
             if k < len(idxs) - 1:
                 j = idxs[k + 1]
-                if str(data["arrive_station"][i]) == str(data["depart_station"][j]) and not is_turnback_pair(data, i, j, st2y):
-                    t0, t1 = int(data["arrive_time"][i]), int(data["depart_time"][j])
-                    st = str(data["arrive_station"][i])
+                if _station_key(td["arrive_station"][i]) == _station_key(td["depart_station"][j]) and not is_turnback_pair(td, i, j, st2y):
+                    t0, t1 = int(td["arrive_time"][i]), int(td["depart_time"][j])
+                    st = _station_key(td["arrive_station"][i])
                     y = st2y[st]
-                    sv_next = service_key(data["service"][j]) if "service" in data else "local"
+
+                    sv_next = service_key(td["service"][j]) if "service" in td else "local"
                     x_dw = [base + timedelta(minutes=t0),base + timedelta(minutes=t1)]
                     y_dw = [y, y]
 
@@ -117,11 +131,11 @@ def build_diamond_figure(
                         j,     # 次区間の tt index を持たせるのが運用上便利
                         tid, st, st,
                         hhmm(t0), hhmm(t1),
-                        service_key(data["service"][j])  ,
-                        str(data.get("direction", ["None"])[j]) if "direction" in data else "None",
+                        service_key(td["service"][j])  ,
+                        str(td.get("direction", ["None"])[j]) if "direction" in td else "None",
                     )
 
-                    if service_key(data["service"][j]) == "local":
+                    if service_key(td["service"][j]) == "local":
                         _extend_with_cd(x_dw, y_dw, cd_dw, xs_dw_local, ys_dw_local, cd_dw_local)
                     else:
                         _extend_with_cd(x_dw, y_dw, cd_dw, xs_dw_rapid, ys_dw_rapid, cd_dw_rapid)
@@ -129,11 +143,12 @@ def build_diamond_figure(
 
         # 出庫（○）・収納（△）マーカー位置（黒固定）
         i0, i1 = idxs[0], idxs[-1]
-        start_x.append(base + timedelta(minutes=int(data["depart_time"][i0]))); start_y.append(st2y[str(data["depart_station"][i0])])
-        end_x.append(base + timedelta(minutes=int(data["arrive_time"][i1])));   end_y.append(st2y[str(data["arrive_station"][i1])])
+        start_x.append(base + timedelta(minutes=int(td["depart_time"][i0]))); start_y.append(st2y[_station_key(td["depart_station"][i0])])
+        end_x.append(base + timedelta(minutes=int(td["arrive_time"][i1])));   end_y.append(st2y[_station_key(td["arrive_station"][i1])])
+
 
         # 折返し（半円）をまとめる
-        for a_t, b_t, st, ori, sv in detect_turnbacks(data, idxs, st2y):
+        for a_t, b_t, st, ori, sv in detect_turnbacks(td, idxs, st2y):
             add_cap_arc_buffer(cap_x[sv][ori], cap_y[sv][ori], float(a_t), float(b_t), st2y[st], ori, base)
 
         # 列車の線を追加（2トレース）
@@ -141,14 +156,14 @@ def build_diamond_figure(
             fig.add_trace(go.Scatter(
                 x=xs_local, y=ys_local, mode="lines",
                 line=dict(width=2, color=COLORS["local_line"]),
-                customdata=cd_local,
+                customtd=cd_local,
                 hovertemplate=(
-                    "task_idx=%{customdata[0]}<br>"
-                    "train_id=%{customdata[1]}<br>"
-                    "%{customdata[2]}→%{customdata[3]}<br>"
-                    "%{customdata[4]}→%{customdata[5]}<br>"
-                    "service=%{customdata[6]}<br>"
-                    "direction=%{customdata[7]}<extra></extra>"
+                    "task_idx=%{customtd[0]}<br>"
+                    "train_id=%{customtd[1]}<br>"
+                    "%{customtd[2]}→%{customtd[3]}<br>"
+                    "%{customtd[4]}→%{customtd[5]}<br>"
+                    "service=%{customtd[6]}<br>"
+                    "direction=%{customtd[7]}<extra></extra>"
                 ),
                 showlegend=False,
             ))
@@ -158,14 +173,14 @@ def build_diamond_figure(
             fig.add_trace(go.Scatter(
             x=xs_rapid, y=ys_rapid, mode="lines",
             line=dict(width=2, color=COLORS["rapid_line"]),
-            customdata=cd_rapid,
+            customtd=cd_rapid,
             hovertemplate=(
-                "task_idx=%{customdata[0]}<br>"
-                "train_id=%{customdata[1]}<br>"
-                "%{customdata[2]}→%{customdata[3]}<br>"
-                "%{customdata[4]}→%{customdata[5]}<br>"
-                "service=%{customdata[6]}<br>"
-                "direction=%{customdata[7]}<extra></extra>"
+                "task_idx=%{customtd[0]}<br>"
+                "train_id=%{customtd[1]}<br>"
+                "%{customtd[2]}→%{customtd[3]}<br>"
+                "%{customtd[4]}→%{customtd[5]}<br>"
+                "service=%{customtd[6]}<br>"
+                "direction=%{customtd[7]}<extra></extra>"
             ),
             showlegend=False,
         ))

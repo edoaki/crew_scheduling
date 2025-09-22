@@ -1,137 +1,59 @@
-# -*- coding: utf-8 -*-
-"""
-round（意思決定ラベル）と [round][station] の lock 集合を作るユーティリティ。
-
-前提（最小）:
-- 各タスク i について以下の同長 numpy 配列を受け取る:
-  dep_station[i] : 出発駅（0..S-1 の整数）
-  dep_time[i]    : 出発時刻（分, int）
-  arr_station[i] : 到着駅（0..S-1 の整数）
-  arr_time[i]    : 到着時刻（分, int）
-
-出力:
-- round_id                : 1始まりのラウンドID（shape [N], int32）
-- round_lock_task_ids     : flatten されたタスクID列（1始まり）
-- round_lock_ptr          : shape [R*S + 1] のポインタ配列
-  -> (r, s) へのアクセスは idx = (r-1)*S + s
-     tasks = round_lock_task_ids[ round_lock_ptr[idx] : round_lock_ptr[idx+1] ]
-
-注:
-- ラウンドは dep_time 昇順で 1パスにより付与する。
-- 「今ラウンドで到着が発生した駅 s の最早到着時刻 ea[s] が、
-   次タスクの dep_station と一致し、かつ ea[s] <= 次タスクの dep_time 」
-  となった瞬間にラウンドを切り替える（earliest-arrival gating）。
-- round_end は保持しない。
-"""
-
-from __future__ import annotations
-from typing import Tuple
 import numpy as np
+from typing import Tuple
 
 def build_round_cache   (
-    dep_station: np.ndarray,
     dep_time: np.ndarray,
-    arr_station: np.ndarray,
-    arr_time: np.ndarray,
-    num_stations: int,
+    train_id: np.ndarray,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
 
     N = int(dep_time.shape[0])
-    S = int(num_stations)
 
-    # dep_time 昇順で処理するための並び替え
+    # dep_time 昇順（同時刻はタスクID昇順）で処理するための並び替え
     order = np.lexsort((np.arange(N), dep_time))
-    inv_order = np.empty(N, dtype=np.int64)
-    inv_order[order] = np.arange(N)
 
+    # 各タスクに割り当てるラウンドID（0始まり）
     round_id = np.zeros(N, dtype=np.int32)
 
-    # ラウンド付与
-    current_round = 1
-    # ea[s] = そのラウンドで観測した駅 s の最早到着
-    ea = np.full(S, np.iinfo(np.int32).max, dtype=np.int32)
-    has_ea = np.zeros(S, dtype=np.bool_)
+    # ラウンド付与：同一ラウンド内で同じ train_id が現れたら切り替える
+    current_round = 0
+    seen_train_ids = set()  # 現在のラウンドで既出の train_id
 
-    prev_dep_time = None
     for idx_in_sorted in range(N):
-        i = order[idx_in_sorted]
-        s_dep = int(dep_station[i])
-        t_dep = int(dep_time[i])
-        s_arr = int(arr_station[i])
-        t_arr = int(arr_time[i])
+        i = int(order[idx_in_sorted])
+        tid = int(train_id[i])
 
-        # ゲーティング判定（このタスクの直前で切る）
-        if has_ea[s_dep] and ea[s_dep] <= t_dep:
+        # 同じラウンドに同じ train_id を入れない
+        if tid in seen_train_ids:
             current_round += 1
-            ea.fill(np.iinfo(np.int32).max)
-            has_ea.fill(False)
+            seen_train_ids.clear()
 
         round_id[i] = current_round
+        seen_train_ids.add(tid)
 
-        # 到着の最早時刻を更新
-        if t_arr < ea[s_arr]:
-            ea[s_arr] = t_arr
-            has_ea[s_arr] = True
+    # タスクID列（0始まり）
+    task_ids = np.arange(N, dtype=np.int64)
 
-        prev_dep_time = t_dep
+    # 総ラウンド数（0..current_round の個数）
+    R = int(current_round + 1) if N > 0 else 0
 
-    R = int(current_round)
+    # 各ラウンドの「最小IDタスク」を保持
+    round_first_task_id = np.full(R, -1, dtype=np.int64)
+    for r in range(R):
+        mask = (round_id == r)
+        if np.any(mask):
+            round_first_task_id[r] = int(task_ids[mask].min())
 
-    # [round][station] の lock（= その (round, station) で出発するタスク）を構築
-    # タスクIDは 1始まりで保存
-    task_ids_1based = np.arange(1, N + 1, dtype=np.int32)
-    # バケツ: (r-1)*S + s で 0..R*S-1
-    buckets = [[] for _ in range(R * S)]
-    for i in range(N):
-        r = int(round_id[i]) - 1
-        s = int(dep_station[i])
-        buckets[r * S + s].append(task_ids_1based[i])
+    # 各タスクが属する round の 0始まり index
+    round_task_to_round = round_id.astype(np.int64)
 
-    ptr = [0]
-    flat = []
-    for b in buckets:
-        flat.extend(b)
-        ptr.append(len(flat))
+    # 各 round の代表時間 = 「最小IDタスク」の dep_time
+    round_time = np.empty(R, dtype=dep_time.dtype)
+    for r in range(R):
+        tid = int(round_first_task_id[r])
+        round_time[r] = dep_time[tid] if tid >= 0 else 0
 
-    round_arrays = _build_round_from_round_id(round_id,dep_time)
-    
-    return round_arrays 
-
-
-def _build_round_from_round_id(round_id: np.ndarray, depart_time: np.ndarray) :
-    """
-    round_id: shape [N] 1-based. Groups are 1..R.
-    depart_time: shape [N] minutes.
-
-    Returns:
-      {"round_ptr":[R+1], "round_tt_idx":[sum], "round_anchor_min":[R]}
-    """
-    if round_id.size == 0:
-        return dict(round_ptr=np.asarray([0], dtype=np.int32),
-                    round_tt_idx=np.asarray([], dtype=np.int32),
-                    round_anchor_min=np.asarray([], dtype=np.int32))
-    rid = np.asarray(round_id, dtype=np.int64)
-    N = rid.shape[0]
-    idx = np.arange(N, dtype=np.int64)
-    order = np.lexsort((idx, depart_time, rid))
-    rid_sorted = rid[order]; tt_idx_sorted = idx[order]
-
-    ptr = [0]; anchor = []; flat = []
-    cur = rid_sorted[0]; start = 0
-    for i in range(N):
-        if rid_sorted[i] != cur:
-            group_idx = tt_idx_sorted[start:i]
-            flat.extend(group_idx.tolist())
-            anchor.append(int(depart_time[group_idx].min()))
-            ptr.append(len(flat))
-            cur = rid_sorted[i]; start = i
-    group_idx = tt_idx_sorted[start:N]
-    flat.extend(group_idx.tolist())
-    anchor.append(int(depart_time[group_idx].min()))
-    ptr.append(len(flat))
-
-    return dict(
-        round_ptr=np.asarray(ptr, dtype=np.int32),
-        round_tt_idx=np.asarray(flat, dtype=np.int32),
-        round_anchor_min=np.asarray(anchor, dtype=np.int32),
-    )
+    return {
+        "round_first_task_id": round_first_task_id,  # [n_rounds], 0始まり
+        "round_task_to_round": round_task_to_round,  # [n_tasks],  0始まり
+        "round_time":           round_time,          # [n_rounds]
+    }

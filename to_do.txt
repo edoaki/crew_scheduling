@@ -1,0 +1,9 @@
+必要
+staticトークナイザー
+static_emb  transformer 
+context emb 
+dyn_emb
+
+pair 
+comunication 
+

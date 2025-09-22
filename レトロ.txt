@@ -1,0 +1,42 @@
+   
+# -------- Ragged（可変長リスト）表現ユーティリティ --------
+@dataclass
+class RaggedIndex:
+    values: torch.Tensor   # 1D [nnz], dtype 任意（通常は long/int）
+    row_ptr: torch.Tensor  # 1D [n_rows+1], dtype=torch.long
+
+    @staticmethod
+    def from_lists(rows: List[List[int]], dtype: torch.dtype = torch.long) -> "RaggedIndex":
+       
+        lens = [len(r) for r in rows]
+        row_ptr = torch.zeros(len(rows) + 1, dtype=torch.long)
+        if len(rows) > 0:
+            row_ptr[1:] = torch.cumsum(torch.tensor(lens, dtype=torch.long), dim=0)
+        if row_ptr[-1].item() == 0:
+            values = torch.empty(0, dtype=dtype)
+        else:
+            values = torch.tensor([x for r in rows for x in r], dtype=dtype)
+        return RaggedIndex(values=values, row_ptr=row_ptr)
+
+    @property
+    def n_rows(self) -> int:
+        return self.row_ptr.numel() - 1
+
+    def row(self, i: int) -> torch.Tensor:
+        start = self.row_ptr[i].item()
+        end = self.row_ptr[i+1].item()
+        return self.values[start:end]
+
+    def lengths(self) -> torch.Tensor:
+        return self.row_ptr[1:] - self.row_ptr[:-1]
+    
+   
+   
+      paths: RaggedIndex  
+   # paths = RaggedIndex.from_lists(g["paths"], dtype=torch.int32)
+
+
+
+
+        # end_station_ids = RaggedIndex.from_lists(g["end_station_ids_rag"], dtype=torch.int32)
+

@@ -49,7 +49,7 @@ def group_by_train(data: Dict[str, Any]) -> Dict[str, List[int]]:
     """
     train_id ごとの行インデックスを depart_time 昇順でまとめる。
     """
-    tids = [str(t) for t in data["train_ids"]]
+    tids = [str(t) for t in data["train_id"]]
     groups: Dict[str, List[int]] = {}
     for i, tid in enumerate(tids):
         groups.setdefault(tid, []).append(i)
@@ -117,8 +117,8 @@ def is_turnback_pair(data: Dict[str, Any], i: int, j: int, st2y: Dict[str, float
             return True  # up→down または down→up
 
     # フォールバック：線分の上下向きで判定（Aが上＝yが小さい）
-    s_a = np.sign(st2y[str(arr_st[i])] - st2y[str(dep_st[i])])   # <0: up, >0: down
-    s_b = np.sign(st2y[str(arr_st[j])] - st2y[str(dep_st[j])])
+    s_a = np.sign(st2y[_station_key(arr_st[i])] - st2y[_station_key(dep_st[i])])
+    s_b = np.sign(st2y[_station_key(arr_st[j])] - st2y[_station_key(dep_st[j])])
     return (s_a != 0 and s_b != 0 and s_a != s_b)
 
 def detect_turnbacks(

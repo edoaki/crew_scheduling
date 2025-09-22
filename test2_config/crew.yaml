@@ -1,0 +1,41 @@
+# crew.yaml
+
+# 時間帯ラベルの統一定義（ここを変えれば全配置に反映）
+time_labels:
+  am:
+    start: "04:30"
+    end: "07:30"
+    signoff_limit: "13:00"  # この時間までに終点駅に着いていないとダメ
+  pm:
+    start: "11:30"
+    end: "17:00"
+    signoff_limit: "17:00"  # この時間までに終点駅に着いていないとダメ
+
+# 駅・時間帯ラベル・人数だけ
+# 終点駅は連続している駅であることを前提に作ってます
+placements:
+  # - station: A
+  #   slot: am
+  #   count: 3
+  #   allowed_signoff: ["A","B"]
+
+  - station: B
+    slot: am
+    count: 2
+    allowed_signoff: ["B"]
+
+
+  - station: D
+    slot: am
+    count: 2
+    allowed_signoff: ["F"]
+
+  - station: A
+    slot: pm
+    count: 1
+    allowed_signoff: ["B"]
+
+add_crew:
+  additional_start: "04:30"
+  additional_end: "20:00"
+  additional_signoff_limit: "20:00"

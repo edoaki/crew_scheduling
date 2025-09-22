@@ -7,6 +7,10 @@ from typing import Dict, List, Tuple, Optional, Any
 import heapq
 import numpy as np
 import random
+import torch
+from tensordict import TensorDict
+import yaml
+
 
 from .core_types import (
     Network, Train, Token, TimetableRow,
@@ -14,7 +18,8 @@ from .core_types import (
     parse_time_hhmm, format_time_hhmm,
     next_stop_station, travel_minutes, can_stop_here, opposite_direction
 )
-from .tokens import load_configs, build_network, make_tokens_from_config, build_params
+from .tokens import build_network, make_tokens_from_config, build_params
+from utils.yaml_loader import load_yaml
 
 
 @dataclass
@@ -39,7 +44,7 @@ class SimContext:
     recorder: TimetableRecorder = field(default_factory=TimetableRecorder)
     # 駅×種別×方向ごとの最後の出発時刻
     last_departure: Dict[Tuple[str, str, str], int] = field(default_factory=dict)
-
+    row_extras: Dict[Tuple[str, int, int], Dict[str, int]] = field(default_factory=dict)
 
 def _get_headway(ctx: SimContext, service: Service, mode: str) -> int:
     hmap = ctx.params["headway_by_service"]
@@ -184,6 +189,15 @@ def step_one_train(ctx: SimContext, train_id: str) -> None:
         service=train.service,
         direction=train.direction,
     ))
+    key = (train.id, depart_time, arrive_time)
+    ctx.row_extras[key] = {
+        "is_dispatch_task": int(mode == "after_dispatch"),
+        "is_depart_from_turnback": int(mode == "after_turnback"),
+        "is_arrival_before_turnback": 0,
+        "is_stabling_at_arrival": 0,
+        "event_complete_time": -1,  # 後段で折返/収納が決まったら上書き
+    }
+
     ctx.last_departure[last_key] = depart_time
 
     inbound_dir = train.direction
@@ -192,8 +206,14 @@ def step_one_train(ctx: SimContext, train_id: str) -> None:
     decision_time = arrive_time + dwell  # 判定のタイムスタンプ
 
     if _maybe_stabling(ctx, v, decision_time, inbound_dir):
+        key = (train.id, depart_time, arrive_time)
+        e = ctx.row_extras.get(key)
+        if e is not None:
+            e["is_stabling_at_arrival"] = 1
+            e["event_complete_time"] = decision_time  # = arrive_time + dwell
         train.alive = False
         return
+
 
     turned = _maybe_short_turn(ctx, train, v, decision_time)
     _ = _maybe_service_conversion(ctx, train, v, decision_time)
@@ -202,6 +222,12 @@ def step_one_train(ctx: SimContext, train_id: str) -> None:
 
     if turned:
         tb = _get_turnback(ctx, v)
+        key = (train.id, depart_time, arrive_time)
+        e = ctx.row_extras.get(key)
+        if e is not None:
+            e["is_arrival_before_turnback"] = 1
+            e["event_complete_time"] = arrive_time + dwell + tb  # 折返し「完了」時刻
+
         train.meta["depart_mode"] = "after_turnback"
         train.next_action_time = arrive_time + dwell + tb
         nxt = next_stop_station(ctx.network, v, train.direction, train.service)
@@ -218,6 +244,12 @@ def step_one_train(ctx: SimContext, train_id: str) -> None:
         # 自動折返し（turnback可なら）
         if ctx.network.stations[v].turnback:
             tb = _get_turnback(ctx, v)
+            key = (train.id, depart_time, arrive_time)
+            e = ctx.row_extras.get(key)
+            if e is not None:
+                e["is_arrival_before_turnback"] = 1
+                e["event_complete_time"] = arrive_time + dwell + tb
+
             train.direction = opposite_direction(train.direction)
             train.meta["depart_mode"] = "after_turnback"
             train.next_action_time = arrive_time + dwell + tb
@@ -239,85 +271,149 @@ def step_one_train(ctx: SimContext, train_id: str) -> None:
         heapq.heappush(ctx.ready, (train.next_action_time, train.id))
 
 
-def _to_minutes(x):
-    # int or "HH:MM"
-    if isinstance(x, (int, np.integer)):
-        return int(x)
-    if isinstance(x, str):
-        x = x.strip()
-        if ":" in x:
-            hh, mm = x.split(":")
-            return int(hh) * 60 + int(mm)
-        # 万一 "530" のような文字数値が来た場合
-        if x.isdigit():
-            return int(x)
-    raise TypeError(f"Unsupported time type: {type(x)} / value={x}")
+def rows_to_td(rows, encoding: dict) -> TensorDict:
+    # encoding: {"service": {...}, "direction": {...}, "station_id": {...}, "train_id_rule": {...}}
+    service_tbl = encoding["service"]
+    direction_tbl = encoding["direction"]
+    station_tbl = encoding["station_id"]
+    rule = encoding.get("train_id_rule", {})
+    prefix = str(rule.get("prefix", "T"))
 
-def _rows_to_tt_arrays(rows: List[dict]) -> Tuple[Dict[str, np.ndarray], List[str]]:
-    def get(r, k):
+    def _get(r, k):
         if isinstance(r, dict):
             return r.get(k)
         return getattr(r, k)
 
+    def _enum_name(x):
+        # Enum -> .value（"local"/"up"...）、それ以外は小文字化した文字列
+        try:
+            v = x.value  # Enum
+        except AttributeError:
+            v = str(x)
+        return v.strip().lower()
+
+    def _enc_cat(name: str, x: str, tbl: dict) -> int:
+        if x not in tbl:
+            known = ", ".join(sorted(tbl))
+            raise ValueError(f"{name} の未知カテゴリ: {x}. 既知: [{known}]")
+        return int(tbl[x])
+
+    def _enc_station(s: str) -> int:
+        s = str(s).strip()
+        if s not in station_tbl:
+            known = ", ".join(sorted(station_tbl))
+            raise ValueError(f"駅ID未知: {s}. 既知: [{known}]")
+        return int(station_tbl[s])
+
+    def _enc_train_id(tid) -> int:
+        if isinstance(tid, (int, np.integer)):
+            return int(tid)
+        tid = str(tid)
+        if not tid.startswith(prefix):
+            raise ValueError(f"train_id prefix不一致: {tid} (expected prefix='{prefix}')")
+        return int(tid[len(prefix):])
+
     N = len(rows)
-
-    # まずはPythonリストに集めてから、最後に np.str_ 固定長Unicode配列へ変換
-    train_ids_list: List[str] = []
-    service_list: List[str] = []
-    direction_list: List[str] = []
-
-    dep_raw: List[str] = []
-    arr_raw: List[str] = []
-
-    dep_time = np.empty(N, dtype=np.int32)
-    arr_time = np.empty(N, dtype=np.int32)
+    train_id = np.empty(N, dtype=np.int32)
+    service = np.empty(N, dtype=np.int32)
+    direction = np.empty(N, dtype=np.int32)
+    depart_station = np.empty(N, dtype=np.int32)
+    arrive_station = np.empty(N, dtype=np.int32)
+    depart_time = np.empty(N, dtype=np.int32)
+    arrive_time = np.empty(N, dtype=np.int32)
 
     for i, r in enumerate(rows):
-        train_ids_list.append(str(get(r, "train_id")))
-        service_list.append(str(get(r, "service")))
-        direction_list.append(str(get(r, "direction")))
+        train_id[i] = _enc_train_id(_get(r, "train_id"))
+        service[i] = _enc_cat("service", _enum_name(_get(r, "service")), service_tbl)
+        direction[i] = _enc_cat("direction", _enum_name(_get(r, "direction")), direction_tbl)
+        depart_station[i] = _enc_station(_get(r, "depart_station"))
+        arrive_station[i] = _enc_station(_get(r, "arrive_station"))
+        depart_time[i] = int(_get(r, "depart_time"))
+        arrive_time[i] = int(_get(r, "arrive_time"))
 
-        ds = get(r, "depart_station")
-        as_ = get(r, "arrive_station")
-        dep_raw.append(str(ds))
-        arr_raw.append(str(as_))
+    data = {
+        "train_id": np.asarray(train_id, dtype=np.int32),
+        "service": np.asarray(service, dtype=np.int32),
+        "direction": np.asarray(direction, dtype=np.int32),
+        "depart_station": np.asarray(depart_station, dtype=np.int32),
+        "arrive_station": np.asarray(arrive_station, dtype=np.int32),
+        "depart_time": np.asarray(depart_time, dtype=np.int32),
+        "arrive_time": np.asarray(arrive_time, dtype=np.int32),
+    }
+    return data
+def rows_to_td_with_events(
+    rows,
+    encoding: dict,
+    extras: Optional[Dict[Tuple[str, int, int], Dict[str, int]]] = None,
+):
+    base = rows_to_td(rows, encoding)  # 既存の変換をそのまま利用
+    N = len(rows)
 
-        dep_time[i] = _to_minutes(str(get(r, "depart_time")))
-        arr_time[i] = _to_minutes(str(get(r, "arrive_time")))
+    is_dispatch_task = np.zeros(N, dtype=np.int32)
+    is_depart_from_turnback = np.zeros(N, dtype=np.int32)
+    is_arrival_before_turnback = np.zeros(N, dtype=np.int32)
+    is_stabling_at_arrival = np.zeros(N, dtype=np.int32)
+    event_complete_time = np.full(N, -1, dtype=np.int32)  # 中間計算用
+    next_event_time_from_depart = np.full(N, -1, dtype=np.int32)
 
-    # 駅ラベル語彙（アルファベット順など固定順）
-    unique_labels = sorted(set(dep_raw) | set(arr_raw))  # 例: ['A','B','C',...]
-    station_label_vocab: List[str] = list(unique_labels)
-    index: Dict[str, int] = {lab: i for i, lab in enumerate(station_label_vocab)}
+    # 行インデックスをtrain_idごとに束ねる（次イベント探索用）
+    per_train_indices: Dict[str, List[int]] = {}
 
-    # エンコード
-    depart_station = np.asarray([index[s] for s in dep_raw], dtype=np.int32)
-    arrive_station = np.asarray([index[s] for s in arr_raw], dtype=np.int32)
+    def _get(r, k):
+        if isinstance(r, dict):
+            return r.get(k)
+        return getattr(r, k)
 
+    # まず各行のフラグをextrasから埋め、trainごとの並びを作る
+    for i, r in enumerate(rows):
+        tid = str(_get(r, "train_id"))
+        dt = int(_get(r, "depart_time"))
+        at = int(_get(r, "arrive_time"))
+        per_train_indices.setdefault(tid, []).append(i)
 
-    # 文字列列は固定長Unicodeで保存（allow_pickle不要にする）
-    train_ids = np.array(train_ids_list, dtype=np.str_)
-    service = np.array(service_list, dtype=np.str_)
-    direction = np.array(direction_list, dtype=np.str_)
+        if extras is not None:
+            e = extras.get((tid, dt, at))
+        else:
+            e = None
 
-    tt = dict(
-        train_ids=train_ids,
-        depart_station=depart_station,
-        arrive_station=arrive_station,
-        depart_time=dep_time,
-        arrive_time=arr_time,
-        service=service,
-        direction=direction,
-    )
-    return tt, station_label_vocab
+        if e is not None:
+            is_dispatch_task[i] = int(e.get("is_dispatch_task", 0))
+            is_depart_from_turnback[i] = int(e.get("is_depart_from_turnback", 0))
+            is_arrival_before_turnback[i] = int(e.get("is_arrival_before_turnback", 0))
+            is_stabling_at_arrival[i] = int(e.get("is_stabling_at_arrival", 0))
+            event_complete_time[i] = int(e.get("event_complete_time", -1))
+        # e が無い場合はデフォルト(0/-1)のまま
+
+    # 各train内で「未来の最初のevent_complete」を後ろ向きで引き当て
+    depart_time = np.asarray(base["depart_time"], dtype=np.int32)
+    for tid, idxs in per_train_indices.items():
+        nearest = -1
+        for j in reversed(idxs):
+            if event_complete_time[j] != -1:
+                nearest = j
+            if nearest == -1:
+                next_event_time_from_depart[j] = -1
+            else:
+                val = int(event_complete_time[nearest]) - int(depart_time[j])
+                next_event_time_from_depart[j] = val if val >= 0 else 0
+
+    # 追加キーを載せて返す（元のキーはそのまま）
+    base["is_dispatch_task"] = is_dispatch_task
+    base["is_depart_from_turnback"] = is_depart_from_turnback
+    base["is_arrival_before_turnback"] = is_arrival_before_turnback
+    base["is_stabling_at_arrival"] = is_stabling_at_arrival
+    base["next_event_time_from_depart"] = next_event_time_from_depart
+    return base
 
 
 def generate_timetable(
     station_yaml_path: str,
     train_yaml_path: str,
+    encoding: dict,
     seed: Optional[int] = None,
 ):
-    station_raw, train_raw = load_configs(station_yaml_path, train_yaml_path)
+    station_raw = load_yaml(station_yaml_path)
+    train_raw = load_yaml(train_yaml_path)
     network = build_network(station_raw)
     params = build_params(station_raw, train_raw)
     rng = random.Random(seed if seed is not None else 1234)
@@ -341,6 +437,7 @@ def generate_timetable(
         step_one_train(ctx, train_id)
 
     rows = ctx.recorder.to_sorted()
-    tt ,station_label_vocab = _rows_to_tt_arrays(rows)
-
-    return tt ,station_label_vocab
+    tt = rows_to_td_with_events(rows, encoding, ctx.row_extras)
+    train_num = int(np.unique(tt["train_id"]).size)
+    return tt, train_num
+    

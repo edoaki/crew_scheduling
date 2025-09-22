@@ -1,0 +1,20 @@
+version: 1
+service:
+  local: 0
+  rapid: 1
+direction:
+  up: 0
+  down: 1
+station_id:
+  A: 0
+  B: 1
+  C: 2
+  D: 3
+  E: 4
+  F: 5
+train_id_rule:
+  type: prefixed_decimal
+  prefix: T
+  width: 6
+  zero_indexed: true
+notes: station_id は station.yaml の topology.ordered_stations の順で連番。service/direction は固定マップ。

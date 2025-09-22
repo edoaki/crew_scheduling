@@ -1,0 +1,10 @@
+
+# 新規配置（出庫・新たに走らせる）
+dispatch:
+  - station: B
+    windows:
+      - start: "05:00"
+        end: "09:00"
+        count: 3
+        direction: up
+        service: local  

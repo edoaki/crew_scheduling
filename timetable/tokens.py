@@ -11,13 +11,6 @@ from .core_types import (
 )
 
 
-def load_configs(station_yaml_path: str, train_yaml_path: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    with open(station_yaml_path, "r", encoding="utf-8") as f:
-        station_raw = yaml.safe_load(f)
-    with open(train_yaml_path, "r", encoding="utf-8") as f:
-        train_raw = yaml.safe_load(f)
-    return station_raw, train_raw
-
 
 def _sv(val: str) -> Service:
     return Service(val)
