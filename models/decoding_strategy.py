@@ -44,7 +44,6 @@ class DecodingStrategy(metaclass=abc.ABCMeta):
     def post_decoder_hook(self):
        return self.logprobs
        
-
     def step(
         self,
         logits: torch.Tensor,

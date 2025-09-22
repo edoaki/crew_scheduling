@@ -29,19 +29,16 @@ class Policy(nn.Module):
         # Encoder: get encoder output and initial embeddings from initial state
         hidden, static_task_mask = self.encoder(env_out)
         done = vec_env.done
+        decoding_strategy= get_decoding_strategy(
+                phase=phase,
+            )
         # まず1stepだけで確認
         cache = self.decoder.pre_decoder_hook(hidden,static_task_mask)
 
-        logit,action_mask= self.decoder(env_out,cache)
-        decoding_strategy= get_decoding_strategy(
-            phase=phase,
-        )
-
-        selected,logprobs = decoding_strategy.step(logit,action_mask,env_out,done)
-        # print("selected",selected.shape)
-        # print(selected)
-        env_out,rewards,dones,info = vec_env.step(selected,env_out)
-    
+        while not vec_env.done.all().item():
+            logit,action_mask= self.decoder(env_out,cache)
+            selected,logprobs = decoding_strategy.step(logit,action_mask,env_out,done)
+            env_out,rewards,dones,info = vec_env.step(selected,env_out)
 
         logprobs = decoding_strategy.post_decoder_hook()
 
