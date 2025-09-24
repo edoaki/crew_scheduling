@@ -47,6 +47,7 @@ class DecodingStrategy(metaclass=abc.ABCMeta):
         else:
             # 時間次元に連結
             self.logprobs = torch.cat([self.logprobs, logprobs], dim=-1)
+     
         return selected
 
     def _step(self, logit: torch.Tensor, mask: torch.Tensor, done) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -128,6 +129,7 @@ class Sampling(DecodingStrategy):
         super(Sampling, self).__init__(temperature, tanh_clipping)
 
     def choose(self,dist):
+        # print("sampling")
         return dist.sample()
     
 class Greedy(DecodingStrategy):
@@ -141,4 +143,5 @@ class Greedy(DecodingStrategy):
         super(Greedy, self).__init__(temperature, tanh_clipping)
 
     def choose(self,dist):
+        # print("greedy")
         return dist.probs.argmax(dim=-1)
