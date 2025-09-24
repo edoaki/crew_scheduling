@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import csv
 import torch
 from rl_core.build import load_configs, build_generator, build_env, build_embeddings, build_policy
 from rl_core.train_loop import reinforce_step, evaluate_mean_reward, save_checkpoint, checkpoint_path
@@ -15,7 +16,7 @@ NUM_EPOCHS = 100
 UPDATES_PER_EPOCH = 1
 LR = 1e-4
 GRAD_CLIP = 1.0
-IMPROVE_PATIENCE = 10
+IMPROVE_PATIENCE = 100
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -37,6 +38,17 @@ def main():
     epochs_since_improve = 0
     one_improve =0
 
+    
+    # --- ログ保存設定 ---
+    run_dir = Path(SAVE_ROOT) / RUN_NAME
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log_path = run_dir / "training_log.csv"
+    # 既存ファイルがなければヘッダを書く
+    if not log_path.exists():
+        with open(log_path, mode="w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["epoch", "train_loss", "cur_mean", "sampling_mean", "baseline_mean"])
+
     print("Starting training...")
     for epoch in range(1, NUM_EPOCHS + 1):
         policy.train()
@@ -53,10 +65,14 @@ def main():
 
         policy.eval()
         with torch.no_grad():
-            cur_mean, _ = evaluate_mean_reward(policy, vec_env, BATCH_SIZE, device,"model")
-            print("cur mean",cur_mean)
+            cur_mean, sampling_mean = evaluate_mean_reward(policy, vec_env, BATCH_SIZE, device,"model")
+            # print("cur mean",cur_mean)
             base_mean, _ = evaluate_mean_reward(baseline_policy, vec_env, BATCH_SIZE, device,"base")
-            print("base mean",base_mean)
+            # print("base mean",base_mean)
+        # --- CSVに1エポック分を追記 ---
+        with open(log_path, mode="a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([epoch, float(loss_val), float(cur_mean), float(sampling_mean), float(base_mean)])
 
         improved = (cur_mean > base_mean)
         if improved:
@@ -78,6 +94,10 @@ def main():
         if epochs_since_improve >= IMPROVE_PATIENCE and one_improve>0:
             print(f"Early stop at epoch {epoch} (no improvement for {IMPROVE_PATIENCE} epochs).")
             break
+
+    # 最終モデルを保存 (base_line ではなく policy の方)
+    torch.save(policy.state_dict(), str(SAVE_ROOT / RUN_NAME / f"{RUN_NAME}.final.pth"))
+    print("Training completed.")
 
 if __name__ == "__main__":
     main()

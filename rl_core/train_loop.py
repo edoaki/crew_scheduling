@@ -21,10 +21,10 @@ def evaluate_mean_reward(policy, vec_env, batch_size: int, device: torch.device,
         sam_reward = calculate_reward(sam_sol, vec_env, device=device)  # [B]
         sampling_mean_reward = sam_reward.mean()
         
-        print("sampling_mean", sampling_mean_reward)
-        count_unassign(batch_size,vec_env,sam_sol)
+        # print("sampling_mean", sampling_mean_reward)
+        # count_unassign(batch_size,vec_env,sam_sol)
 
-    return reward.mean().item(), reward
+    return reward.mean().item(), sampling_mean_reward if mode == "model" else None
 
 def reinforce_step(policy, baseline_policy, vec_env, batch_size: int, device: torch.device, optimizer, grad_clip: float):
     td_batch = vec_env.generate_batch_td(B=batch_size)
@@ -68,7 +68,7 @@ def save_checkpoint(path: Path, epoch: int, policy, baseline_policy, optimizer, 
         "base_mean_reward": base_mean_reward,
     }, str(path))
 
-
+ 
 from rl_env.reward import evaluate_solution
 # unassigned_countの分布を見る
 from collections import Counter

@@ -1,117 +1,103 @@
-from utils.yaml_loader import load_yaml
-from rl_env.generator import CrewARGenerator 
-from rl_env.batch_env import VecCrewAREnv
-from models.embedding.common_emb import StationEmbedding, TimeFourierEncoding
-from models.embedding.context_emb import ContextEmbedding
-from models.pointer_attention import PointerAttention
-from models.embedding.pair_emb import PairMlp
-from models.embedding.utils import load_station_time_from_A
-from models.encoder import PARCOEncoder
-from models.decoder import PARCODecoder
-from models.policy import Policy
-from rl_env.reward import calculate_reward
-
-
 import os
-import copy
-import torch
-from torch.nn.utils import clip_grad_norm_
-
-
 from pathlib import Path
+import csv
+import torch
+from rl_core.build import load_configs, build_generator, build_env, build_embeddings, build_policy
+from rl_core.train_loop import reinforce_step, evaluate_mean_reward, save_checkpoint, checkpoint_path
 
+# ====== 設定（必要に応じて run.yaml から読み込むように変えてもOK） ======
 DATA_DIR = Path("data")
-CONFIG_DIR = Path("test2_config")
+CONFIG_DIR = Path("test2_config")  # ここが run_name の元になる
+RUN_NAME = CONFIG_DIR.name         # pth 名に反映
+SAVE_ROOT = Path("checkpoints")
+BATCH_SIZE = 100
 
-station_yaml = str(CONFIG_DIR / "station.yaml")
-train_yaml = str(CONFIG_DIR / "train.yaml")
-constraints_yaml = str(CONFIG_DIR / "constraints.yaml")
-crew_yaml = str(CONFIG_DIR / "crew.yaml")
-encoding_yaml = str(CONFIG_DIR / "encoding.yaml")
+NUM_EPOCHS = 100
+UPDATES_PER_EPOCH = 1
+LR = 1e-4
+GRAD_CLIP = 1.0
+IMPROVE_PATIENCE = 100
 
-data_path = DATA_DIR / "sample.npz"
+def main():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-generator= CrewARGenerator(station_yaml=station_yaml,
-                            train_yaml=train_yaml,
-                            constraints_yaml=constraints_yaml,
-                            crew_yaml=crew_yaml
-                            )
+    cfg = load_configs(CONFIG_DIR)
+    paths = cfg["paths"]
+    constraints = cfg["constraints"]
 
-constraints = load_yaml(constraints_yaml)
+    generator = build_generator(paths)
+    station_emb, time_emb = build_embeddings(paths["station_yaml"], paths["encoding_yaml"])
+    vec_env = build_env(generator, constraints, batch_size=BATCH_SIZE, device=device)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    policy = build_policy(station_emb, time_emb).to(device)
+    baseline_policy = build_policy(station_emb, time_emb).to(device)
+    baseline_policy.load_state_dict(policy.state_dict())
 
-station_time_from_A = load_station_time_from_A(station_yaml,encoding_yaml)
+    optimizer = torch.optim.Adam(policy.parameters(), lr=LR)
 
-station_emb = StationEmbedding(
-            num_stations=6,
-            d_station_id=8,
-            d_timepos=16,
-            station_time_from_A=station_time_from_A
-        )
-time_emb = TimeFourierEncoding(d_out=16, period=1440, n_harmonics=8)
-crew_emb = Crew_DyamicEmbedding = None
+    epochs_since_improve = 0
+    one_improve =0
 
-encoder = PARCOEncoder(time_emb=time_emb,
-                        station_emb=station_emb,
-                        embed_dim=127,
-                       )
+    
+    # --- ログ保存設定 ---
+    run_dir = Path(SAVE_ROOT) / RUN_NAME
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log_path = run_dir / "training_log.csv"
+    # 既存ファイルがなければヘッダを書く
+    if not log_path.exists():
+        with open(log_path, mode="w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["epoch", "train_loss", "cur_mean", "sampling_mean", "baseline_mean"])
 
-context_emb = ContextEmbedding(
-    time_emb=time_emb,
-    station_emb=station_emb,
-    embed_dim=128,
-    scale_factor=10,
-)
+    print("Starting training...")
+    for epoch in range(1, NUM_EPOCHS + 1):
+        policy.train()
+        for _ in range(UPDATES_PER_EPOCH):
+            loss_val = reinforce_step(
+                policy=policy,
+                baseline_policy=baseline_policy,
+                vec_env=vec_env,
+                batch_size=BATCH_SIZE,
+                device=device,
+                optimizer=optimizer,
+                grad_clip=GRAD_CLIP,
+            )
 
-pair_encoding = PairMlp(hidden_dim=16,out_dim=1)
-pointer = PointerAttention(embed_dim=128,num_heads=8)
+        policy.eval()
+        with torch.no_grad():
+            cur_mean, sampling_mean = evaluate_mean_reward(policy, vec_env, BATCH_SIZE, device,"model")
+            # print("cur mean",cur_mean)
+            base_mean, _ = evaluate_mean_reward(baseline_policy, vec_env, BATCH_SIZE, device,"base")
+            # print("base mean",base_mean)
+        # --- CSVに1エポック分を追記 ---
+        with open(log_path, mode="a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([epoch, float(loss_val), float(cur_mean), float(sampling_mean), float(base_mean)])
 
-decoder = PARCODecoder(context_embedding=context_emb,
-                       pair_encoding= pair_encoding,
-                        pointer=pointer,
-                          embed_dim=128,
-                       )
+        improved = (cur_mean > base_mean)
+        if improved:
+            one_improve +=1
+            baseline_policy.load_state_dict(policy.state_dict())
+            epochs_since_improve = 0
+            ckpt = checkpoint_path(SAVE_ROOT, RUN_NAME, epoch)
+            save_checkpoint(ckpt, epoch, policy, baseline_policy, optimizer, cur_mean, base_mean)
+        else:
+            epochs_since_improve += 1
 
-batch_size = 100
-vec_env = VecCrewAREnv(generator=generator,constraints=constraints,batch_size=batch_size,device=device) 
-policy = Policy(encoder=encoder,decoder=decoder) 
+        print(f"****[Epoch {epoch:03d}] "
+              f"train_loss={loss_val:.6f}  "
+              f"cur_mean_reward={cur_mean:.6f}  "
+              f"baseline_mean_reward={base_mean:.6f}  "
+              f"improved={improved}  "
+              f"no_improve_for={epochs_since_improve}")
 
-td_batch = vec_env.generate_batch_td(B=batch_size)
-env_out = vec_env.reset(td_batch)
+        if epochs_since_improve >= IMPROVE_PATIENCE and one_improve>0:
+            print(f"Early stop at epoch {epoch} (no improvement for {IMPROVE_PATIENCE} epochs).")
+            break
 
-# 方策サンプリング（train：確率的）
-outdict = policy(env_out=env_out, vec_env=vec_env, phase="train")
-sol = outdict["solution"]
-# print("station ",env_out["statics"]["tasks"]["depart_station"])
-# print("solution:", sol)
-logprobs = outdict["log_likelihood"]  # [B]
-# 報酬（reward = -cost で既に計算済み想定）
-reward = calculate_reward(sol, vec_env, device=device)  # [B]
+    # 最終モデルを保存 (base_line ではなく policy の方)
+    torch.save(policy.state_dict(), str(SAVE_ROOT / RUN_NAME / f"{RUN_NAME}.final.pth"))
+    print("Training completed.")
 
-from rl_env.reward import evaluate_solution
-batch_totals = []
-for i in range(batch_size):
-    env = vec_env.envs[i]
-    s = env.static
-    T = s.num_tasks
-    C = s.num_crews
-
-    # print(f"=== Batch {i} ===")
-
-    # sol[i] は [T]
-    sol_i = sol[i]
-    # print("sol ",sol_i)
-    # print("dep ",s.depart_station)
-
-    result = evaluate_solution(s, sol_i)
-    batch_totals.append({
-        "total_work_time": result["total_work_time"],
-        "total_hitch_time": result["total_hitch_time"],
-        "unassigned_count": result["unassigned_count"],
-    })
-
-# unassigned_countの分布を見る
-from collections import Counter
-uc_list = [bt["unassigned_count"] for bt in batch_totals]
-print("unassigned_count",Counter(uc_list))
+if __name__ == "__main__":
+    main()

@@ -1,9 +1,7 @@
-必要
-staticトークナイザー
-static_emb  transformer 
-context emb 
-dyn_emb
 
-pair 
-comunication 
+
+最適マッチング
+
+中規模問題を作成
+
 
