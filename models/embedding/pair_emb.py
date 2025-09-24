@@ -15,8 +15,10 @@ class PairMlp(nn.Module):
         # print("pair_bias_info in pair emb",pair_bias_info["is_hitch"].shape)
         feats = self.preprocess_pair_features(pair_bias_info)  # [B,C,T,5]
         x = self.ln(feats)
+   
         pair_bias = self.mlp(x)  # [B,C,T,out_dim]
         pair_bias = pair_bias.squeeze(-1)  # [B,C,T] (out_dim=1 の場合)
+      
         return pair_bias
     
 

@@ -40,6 +40,7 @@ class StaticBundle:
     is_hitch: torch.Tensor          # [T, S] bool（その駅から当該タスクへ“拾える”か）
     hops: torch.Tensor              # [T, S] long
     hitch_minutes: torch.Tensor     # [T, S] long（その駅から当該タスクまで必要な移動分）
+    
 
 
     # 乗務員の不変属性
@@ -96,7 +97,7 @@ class StaticBundle:
         is_hitch = t(g["is_hitch"]).to(torch.bool).reshape(T, S)
         hops = t(g["hops"]).to(torch.int16).reshape(T, S)
         hitch_minutes = t(g["hitch_minutes"], torch.long).reshape(T, S)
-     
+
 
         start_station_idx = t(g["start_station_idx"], torch.long)
         assignable_start_min = t(g["assignable_start_min"], torch.long)
@@ -193,6 +194,7 @@ class StaticObs:
     # メタ情報
     num_tasks: int # T
     num_crews: int # C
+    num_rounds: int # R
 
     # ---- Task 静的属性（StaticBundle 由来：変わらない）---- 
     # task(行路)ごと情報
@@ -236,6 +238,7 @@ class StaticObs:
             crew_signoff_limit_min=static.crew_signoff_limit_min,
             num_tasks=static.num_tasks,
             num_crews=static.num_crews,
+            num_rounds=static.num_rounds,
         )
 
 # --- 観測（各ステップで変わる情報／静的は含めない）---

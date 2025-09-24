@@ -109,45 +109,28 @@ class PARCODecoder(nn.Module):
         glimpse_k = self.project_k(task_context)
         glimpse_v = self.project_v(task_context)
         logit_k   = self.project_l(task_context)
+      
+
         
         # # # マスクは td 側（環境）から
         attn_mask = crew_mask[..., :, None] & task_mask[..., None, :]
 
-        # print("task_mask",task_mask.shape)
-        # # print(task_mask)
-        # print("crew_mask",crew_mask.shape)
-        # # print(crew_mask)
-        # print("task_mask",task_mask.shape)
-
-        # print("attn_mask",attn_mask.shape)
         mask = out["masks"]["action_mask"]
-        # print("action_mask",mask.shape)
-
-        # print("glimpse_q",glimpse_q.shape)
-        # print("glimpse_k",glimpse_k.shape)
-        # print("glimpse_v",glimpse_v.shape)
 
         pointer_mask = attn_mask & mask
-        # print(attn_mask)
-        # print("mask ",mask.shape)
-        # print(mask)
-        # 検証用
+
         # pointer_maskとmaskは同じはずだから判定 形状だけでなく、中身も全て同じはず
         if pointer_mask.shape != mask.shape or not torch.all(pointer_mask == mask):
             print("pointer_mask",pointer_mask)
             print("action_mask",mask)
             raise ValueError("pointer_mask と action_mask が異なります")
-
+        
         pair_bias_info = out["pairs"]
-        # print("pair_bias_info",pair_bias_info["is_hitch"].shape)
         pair_bias = self.pair_encoding(pair_bias_info)
         pair_bias = pair_bias.masked_fill(attn_mask == 0, 0.0)  
-
+        # print("pair_bias",pair_bias)
         # # PointerAttention に渡してロジットを得る
-        logits = self.pointer(glimpse_q, glimpse_k, glimpse_v, logit_k,pair_bias,pointer_mask)
-        # print("logits",logits.shape)
-        # print("logits",logits.shape)
-        # print(logits)
-
+        logits = self.pointer(glimpse_q, glimpse_k, glimpse_v, logit_k,pointer_mask,pair_bias)
+        # print("decoder logits",logits)
         return logits,pointer_mask
   

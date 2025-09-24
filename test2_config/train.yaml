@@ -1,18 +1,18 @@
 
 # 新規配置（出庫・新たに走らせる）
 dispatch:
-  - station: D
-    windows:
-      - start: "05:30"
-        end: "09:00"
-        count: 2
-        direction: up
-        service: local  
+  # - station: D
+  #   windows:
+  #     - start: "05:30"
+  #       end: "09:00"
+  #       count: 2
+  #       direction: up
+  #       service: local  
 
   - station: B
     windows:
       - start: "05:30"
-        end: "09:00"
+        end: "07:00"
         count: 2
         direction: up
         service: local  

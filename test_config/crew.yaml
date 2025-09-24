@@ -14,14 +14,14 @@ time_labels:
 # 駅・時間帯ラベル・人数だけ
 # 終点駅は連続している駅であることを前提に作ってます
 placements:
-  # - station: A
-  #   slot: am
-  #   count: 3
-  #   allowed_signoff: ["A","B"]
+  - station: A
+    slot: am
+    count: 1
+    allowed_signoff: ["B"]
 
   - station: B
     slot: am
-    count: 3
+    count: 2
     allowed_signoff: ["B"]
 
 

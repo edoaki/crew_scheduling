@@ -57,7 +57,7 @@ segments:
       time: "00:05"
     - from: E
       to: F
-      time: "00:37"
+      time: "00:20"
   -rapid:
     - from: A
       to: E

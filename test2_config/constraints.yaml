@@ -1,7 +1,7 @@
 # constraints.yaml
 
-duty_max_min: 480                 # 最大勤務時間（例: 8時間）
-continuous_drive_max_min: 100     # 休憩なし連続乗務の上限（例:3時間）
+duty_max_min: 300               # 最大勤務時間（例: 8時間）
+continuous_drive_max_min: 60     # 休憩なし連続乗務の上限（例:3時間）
 break_min: 30                     # 休憩の最低時間
 
 dispatch_prep_min: 15             # 出庫準備時間
@@ -14,5 +14,5 @@ board_min: 5               # 乗るのにかかる最低時間
 post_hitch_ready_min: 0   # 便乗後に乗務できる最低時間
 
 # 探索パラメータ（必要に応じて調整）
-max_hops: 2                # 便乗の本数上限
+max_hops: 5               # 便乗の本数上限
 window_min: 120            # 逆探索の時間窓

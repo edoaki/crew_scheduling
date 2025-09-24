@@ -1,99 +1,117 @@
 from utils.yaml_loader import load_yaml
+from rl_env.generator import CrewARGenerator 
+from rl_env.batch_env import VecCrewAREnv
+from models.embedding.common_emb import StationEmbedding, TimeFourierEncoding
+from models.embedding.context_emb import ContextEmbedding
+from models.pointer_attention import PointerAttention
+from models.embedding.pair_emb import PairMlp
+from models.embedding.utils import load_station_time_from_A
+from models.encoder import PARCOEncoder
+from models.decoder import PARCODecoder
+from models.policy import Policy
+from rl_env.reward import calculate_reward
 
-from rl_env.generator import CrewARGenerator ,save_npz,load_npz
-from rl_env.env import CrewAREnv
+
+import os
+import copy
+import torch
+from torch.nn.utils import clip_grad_norm_
+
+
 from pathlib import Path
-import numpy as np
 
 DATA_DIR = Path("data")
-CONFIG_DIR = Path("test_config")
+CONFIG_DIR = Path("test2_config")
 
 station_yaml = str(CONFIG_DIR / "station.yaml")
 train_yaml = str(CONFIG_DIR / "train.yaml")
 constraints_yaml = str(CONFIG_DIR / "constraints.yaml")
 crew_yaml = str(CONFIG_DIR / "crew.yaml")
+encoding_yaml = str(CONFIG_DIR / "encoding.yaml")
 
 data_path = DATA_DIR / "sample.npz"
 
-generator = CrewARGenerator(station_yaml=station_yaml,
+generator= CrewARGenerator(station_yaml=station_yaml,
                             train_yaml=train_yaml,
                             constraints_yaml=constraints_yaml,
                             crew_yaml=crew_yaml
                             )
 
-from models.policy import DummyModel
-from models.agent_handler import GreedyAgentHandler
-
-model = DummyModel()
-agent_handler = GreedyAgentHandler()
-
-td = generator.generate()
-save_npz(data_path, td)
-
-td = load_npz(data_path)
-
 constraints = load_yaml(constraints_yaml)
-env = CrewAREnv(constraints)
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-static_obs,dyn_obs,mask ,pair_info= env.reset(td)
+station_time_from_A = load_station_time_from_A(station_yaml,encoding_yaml)
 
-# # model.reset(static_obs)
-# print(env.dyn.crew_station)
-# print(env.dyn.crew_ready_time)
+station_emb = StationEmbedding(
+            num_stations=6,
+            d_station_id=8,
+            d_timepos=16,
+            station_time_from_A=station_time_from_A
+        )
+time_emb = TimeFourierEncoding(d_out=16, period=1440, n_harmonics=8)
+crew_emb = Crew_DyamicEmbedding = None
 
-# print(mask)
+encoder = PARCOEncoder(time_emb=time_emb,
+                        station_emb=station_emb,
+                        embed_dim=127,
+                       )
 
-# action_prob = model(dyn_obs)
-# assignment = agent_handler.assign(mask, action_prob)
-# print(assignment)
+context_emb = ContextEmbedding(
+    time_emb=time_emb,
+    station_emb=station_emb,
+    embed_dim=128,
+    scale_factor=10,
+)
 
-# dyn_obs,mask,pair_info,reward, done, info = env.step(assignment)
-# print("after step")
-# print(env.dyn.task_assign)
-# print(env.dyn.train_last_crew_id)
-# print(env.dyn.crew_station)
-# print(env.dyn.crew_ready_time
+pair_encoding = PairMlp(hidden_dim=16,out_dim=1)
+pointer = PointerAttention(embed_dim=128,num_heads=8)
 
+decoder = PARCODecoder(context_embedding=context_emb,
+                       pair_encoding= pair_encoding,
+                        pointer=pointer,
+                          embed_dim=128,
+                       )
 
-# ===== rollout (1 episode) =====
-total_reward = 0.0
-step_idx = 0
-history = []  # 必要ならログ用
-done = False
-print("round ",env.static.num_rounds)
-while not done:
-    # 1) 方策から行動確率（あるいはスコア）を計算
-    action_prob = model(dyn_obs)
+batch_size = 100
+vec_env = VecCrewAREnv(generator=generator,constraints=constraints,batch_size=batch_size,device=device) 
+policy = Policy(encoder=encoder,decoder=decoder) 
 
-    # 2) マスクを考慮して割当を決定（貪欲ハンドラ）
-    assignment = agent_handler.assign(mask, action_prob)
-    # print(assignment)
-    # print(mask)
-    # 3) 環境を1ステップ進める
-    dyn_obs, mask, pair_info, reward, done, info = env.step(assignment)
+td_batch = vec_env.generate_batch_td(B=batch_size)
+env_out = vec_env.reset(td_batch)
 
-    # print("ready ",dyn_obs.crew_ready_time)
+# 方策サンプリング（train：確率的）
+outdict = policy(env_out=env_out, vec_env=vec_env, phase="train")
+sol = outdict["solution"]
+# print("station ",env_out["statics"]["tasks"]["depart_station"])
+# print("solution:", sol)
+logprobs = outdict["log_likelihood"]  # [B]
+# 報酬（reward = -cost で既に計算済み想定）
+reward = calculate_reward(sol, vec_env, device=device)  # [B]
 
-    # 4) 報酬を集計（torch/npのスカラー両対応）
-    r = reward.item() if hasattr(reward, "item") else float(reward)
-    total_reward += r
+from rl_env.reward import evaluate_solution
+batch_totals = []
+for i in range(batch_size):
+    env = vec_env.envs[i]
+    s = env.static
+    T = s.num_tasks
+    C = s.num_crews
 
-    # 5) ログ（必要なら）
-    history.append({
-        "step": step_idx,
-        "reward": r,
-        "done": done,
-        "info": info,
-        "assignment": assignment,
+    # print(f"=== Batch {i} ===")
+
+    # sol[i] は [T]
+    sol_i = sol[i]
+    # print("sol ",sol_i)
+    # print("dep ",s.depart_station)
+
+    result = evaluate_solution(s, sol_i)
+    batch_totals.append({
+        "total_work_time": result["total_work_time"],
+        "total_hitch_time": result["total_hitch_time"],
+        "unassigned_count": result["unassigned_count"],
     })
 
-    step_idx += 1
-    print(f"[Step] step={step_idx}, reward={r}, done={done}, info={info} round_time = {env.dyn.now_round_time}")
-    print()
-
-print("--Final task_assign")
-print("train_id ",env.static.train_id)  
-print("dep station ",env.static.depart_station)
-print("assign ",env.dyn.task_assign)
-print(f"[Episode] steps={step_idx}, total_reward={total_reward}")
+# unassigned_countの分布を見る
+from collections import Counter
+uc_list = [bt["unassigned_count"] for bt in batch_totals]
+print("unassigned_count",Counter(uc_list))

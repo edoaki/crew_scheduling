@@ -30,8 +30,11 @@ def collate_static_obs(
 
     # 各サンプルのタスク長（service を基準に）
     T_list = [int(getattr(s, "service").shape[0]) for s in statics]
+  
     T_max = max(T_list)
     B = len(statics)
+
+    round_max = max([s.num_rounds for s in statics])
 
     # パディングマスク（True=実データ, False=PAD）
     task_mask_list = []
@@ -93,6 +96,7 @@ def collate_static_obs(
         "pad_masks": {
             "tasks": task_mask,  # [B, T_max] True=実データ, False=PAD
         },
+        "round_max": round_max
     }
 
     if return_aux:

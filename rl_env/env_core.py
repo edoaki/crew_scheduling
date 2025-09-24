@@ -194,7 +194,7 @@ def build_window_index(s :StaticBundle,d:DynamicState,task_lookahead:int) -> Win
     """
 
     r = int(d.now_round)  
-    print("build_window_index for round ", r)
+    # print("build_window_index for round ", r)
     if r >= int(s.num_rounds):
         return WindowIndex(
             local_task_ids=torch.empty((0,), dtype=torch.long),

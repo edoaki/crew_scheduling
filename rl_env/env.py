@@ -80,11 +80,11 @@ class CrewAREnv:
         # 報酬計算
         reward = self._compute_reward(assignment)
 
-         # 終了判定
-        done = self._is_done()
-
         # ラウンド前進  
         next_round_time = self._advance_round()
+
+        # 終了判定
+        done = self._is_done()
 
         # 次ラウンド開始時の自動休憩反映,退勤判定
         self._auto_apply_crew(next_round_time)
@@ -193,8 +193,8 @@ class CrewAREnv:
         # print("assignment",assignment)
 
         if assignment.unassigned_task_ids.numel() > 0:
-            print(f"[warn] 割り当てに失敗したタスク: {assignment.unassigned_task_ids.tolist()}")
-
+            # print(f"[warn] 割り当てに失敗したタスク: {assignment.unassigned_task_ids.tolist()}")
+            pass
             # must_be_by_minを表示する
             # for task_id in assignment.unassigned_task_ids.tolist():
             #     mbm_row = self.static.must_be_by_min[task_id]
@@ -211,7 +211,7 @@ class CrewAREnv:
         train_id_arr      = self.static.train_id
 
         for crew_id, task_id in valid_pairs.tolist():
-            print(f"Assign crew {crew_id} to task {task_id}")
+            # print(f"Assign crew {crew_id} to task {task_id}")
             # タスク側: 担当クルーIDを設定
             self.dyn.task_assign[task_id] = crew_id
 
@@ -262,10 +262,11 @@ class CrewAREnv:
         - now_time を round_time[now_round] に更新
         - 必要に応じて「3時間ウィンドウ」の再構成は次の観測生成時に行う
         """
-        print("now ",self.dyn.now_round," round ",self.static.num_rounds)
+
+        # print("now ",self.dyn.now_round," round ",self.static.num_rounds)
         if self.dyn.now_round+1 >= self.static.num_rounds:
             self.dyn.now_round = self.static.num_rounds
-            print("if 100000 done by round end")
+            # print("if 100000 done by round end")
             # ここで done を立て、時刻は現在ラウンドのものを維持
             return 100000  # ダミー値
     
@@ -277,7 +278,7 @@ class CrewAREnv:
         assert self.static is not None and self.dyn is not None
         # 現ラウンド（0始まり）が最終ラウンド（num_rounds-1）に到達していれば終了
         if self.dyn.now_round >= self.static.num_rounds:
-            print("done by round end")
+            # print("done by round end")
             return True
         return False
 

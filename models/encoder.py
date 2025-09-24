@@ -57,14 +57,14 @@ class PARCOEncoder(nn.Module):
         direction_shift = torch.clamp(direction - 1, min=0)
         ds_shift        = torch.clamp(ds - 1, min=0)               # 1..6 → 0..5
         as_shift        = torch.clamp(as_ - 1, min=0)
-       
+        
         # 埋め込み／エンコーディング
         e_service   = self.service_emb(service_shift)              # [B,T,Ds]
         e_direction = self.direction_emb(direction_shift)          # [B,T,Dd]
         e_ds        = self.station_emb(ds_shift)                   # [B,T,De]
         e_as        = self.station_emb(as_shift)                   # [B,T,De]
         e_time      = self.time_emb(t_dep) + self.time_emb(t_arr)  # [B,T,Dt]
-
+        
         # is_* は素直にスタックして射影
         is_keys = [k for k in tasks.keys() if k.startswith("is_")]
         flags   = torch.stack([tasks[k].float().to(device) for k in is_keys], dim=-1)  # [B,T,F]
@@ -72,7 +72,7 @@ class PARCOEncoder(nn.Module):
 
         # 異なる次元を結合 → 最終次元を LayerNorm の normalized_shape に合わせる
         x = torch.cat([e_service, e_direction, e_ds, e_as, e_time, e_flags], dim=-1)   # [B,T,ΣD*]
-        print("x",x.shape)
+        # print("x",x.shape)
 
         task_emb = self.fuse(x)                              # [B,T,target_dim]
         task_emb = self.norm(task_emb)                         # normalized_shape と一致

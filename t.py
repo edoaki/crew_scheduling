@@ -49,25 +49,24 @@ import torch
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-B = 2
+B = 100
 vec_env = VecCrewAREnv(generator=generator1,constraints=constraints,batch_size=B,device=device)
 
-td1 = generator1.generate()
-td2 = generator2.generate()
 
-td_batch = [td1,td2]
-print("batch 0 task ",td_batch[0]["depart_time"].shape)
-print("batch 1 task ",td_batch[1]["depart_time"].shape)
-
-print("batch 0 crew ",td_batch[0]["start_station_idx"].shape)
-print("batch 1 crew ",td_batch[1]["start_station_idx"].shape)
+# td1 = generator1.generate()
+# td2 = generator2.generate()
+# td_batch = [td1]
+# print("batch 0 task ",td_batch[0]["depart_time"].shape)
+# print("batch 1 task ",td_batch[1]["depart_time"].shape)
+# print("batch 0 crew ",td_batch[0]["start_station_idx"].shape)
+# print("batch 1 crew ",td_batch[1]["start_station_idx"].shape)
 
 out = vec_env.reset(td_batch)
 
-print("static task shape",out['statics']["tasks"]["service"].shape)
+# print("s task shape",out['ss']["tasks"]["service"].shape)
 
 
-print()
+# print()
 from models.embedding.common_emb import StationEmbedding, TimeFourierEncoding
 station_time_from_A = load_station_time_from_A(station_yaml,encoding_yaml)
 
@@ -85,7 +84,7 @@ encoder = PARCOEncoder(time_emb=time_emb,
                         embed_dim=127,
                        )
 
-hidden,static_task_mask = encoder(out)
+hidden,s_task_mask = encoder(out)
 
 from models.embedding.context_emb import ContextEmbedding
 context_emb = ContextEmbedding(
@@ -111,5 +110,37 @@ decoder = PARCODecoder(context_embedding=context_emb,
 from models.policy import Policy
 policy = Policy(encoder=encoder,decoder=decoder)
 
-outdict = policy(env_out=out,vec_env=vec_env,phase="train")
 
+outdict = policy(env_out=out,vec_env=vec_env,phase="train")
+sol = outdict["solution"]
+
+# 折り返し・省略を抑える
+torch.set_printoptions(linewidth=10_000, threshold=10_000, sci_mode=False)
+np.set_printoptions(linewidth=10_000, threshold=10_000, suppress=True)
+
+from rl_env.reward import evaluate_solution
+batch_totals = []
+for i in range(B):
+    env = vec_env.envs[i]
+    s = env.static
+    T = s.num_tasks
+    C = s.num_crews
+
+    # print(f"=== Batch {i} ===")
+
+    # sol[i] は [T]
+    sol_i = sol[i]
+    # print("sol ",sol_i)
+    # print("dep ",s.depart_station)
+
+    result = evaluate_solution(s, sol_i)
+    batch_totals.append({
+        "total_work_time": result["total_work_time"],
+        "total_hitch_time": result["total_hitch_time"],
+        "unassigned_count": result["unassigned_count"],
+    })
+
+# unassigned_countの分布を見る
+from collections import Counter
+uc_list = [bt["unassigned_count"] for bt in batch_totals]
+print("unassigned_count",Counter(uc_list))

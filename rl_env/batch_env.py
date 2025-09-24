@@ -96,8 +96,8 @@ class VecCrewAREnv:
                 dones.append(True)
                 infos.append({"skipped": True})
                 continue
-            print()
-            print(f"Env {i} processing assignment")
+            # print()
+            # print(f"Env {i} processing assignment")
             dyn, mask, pair, reward, done, info = env.step(assignments[i])
 
             if done:
@@ -136,17 +136,23 @@ class VecCrewAREnv:
         return {"dyns": dyn_batch, "masks": mask_batch, "pairs": pair_batch},torch.tensor(rewards, device=self.device), torch.tensor(dones, device=self.device), infos
     
     def return_solution(self):
-        solutions: List[Assignment] = []
+        solutions = []
         for env in self.envs:
             sol = env.dyn.task_assign
-            solutions.append(sol)
+            # 既存Tensorでもwarningが出ないように as_tensor を使う
+            sol_tensor = torch.as_tensor(sol, dtype=torch.long, device=self.device)
+            solutions.append(sol_tensor)
+
         return solutions
 
     def generate_batch_td(
         self,
-        B: int,
         seed: Optional[int] = None,
+        B: Optional[int] = None
     ) -> List[Dict[str, Any]]:
+        
+        if B is None:
+            B = self.batch_size
         
         td_batch = [self.generator.generate() for _ in range(B)]
         return td_batch
