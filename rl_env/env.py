@@ -66,19 +66,24 @@ class CrewAREnv:
         dyn_obs = DynamicObs.obs_from_dynamic(self.static,self.dyn, window)
         mask = get_action_mask(self.static,self.dyn,dyn_obs,self.continuous_drive_max_min)
         pair_info = build_pair_info(dyn_obs, mask,self.static,self.dyn)
+        # 連続勤務回数カウンタ（各クルー）: 観測には載せない
+        self.dyn.crew_consec_assign_count = torch.zeros_like(self.dyn.crew_station, dtype=torch.int32)
+
 
         return static_obs,dyn_obs,mask,pair_info
 
     def step(self,assignment:Assignment):
         assert self.static is not None and self.dyn is not None, "reset() 実行前です。"
 
-        
+        # 報酬用に「更新前」の train_last_crew_id をスナップショット
+        prev_train_last_crew_id = self.dyn.train_last_crew_id.clone()
+
         # 状態更新: 割当結果を self.dyn に反映
         self._assignments_update_state(self.dyn,assignment)
         # 割り当てができなかった場合の処理も必要 （未実装）
 
-        # 報酬計算
-        reward = self._compute_reward(assignment)
+         # 報酬計算（連続同一列車: 折り返しは _assignments_update_state 側で -1 リセットされるため非連続扱い）
+        reward = self._compute_reward(assignment, prev_train_last_crew_id)
 
         # ラウンド前進  
         next_round_time = self._advance_round()
@@ -222,6 +227,15 @@ class CrewAREnv:
             # train_id は long 前提だが item() で int 化
             train_id = int(train_id_arr[task_id].item())
 
+            is_continuous = False
+            if bool(dyn.crew_on_duty[crew_id]):
+                prev_ready = int(dyn.crew_ready_time[crew_id].item())
+                idle_gap = depart_time - prev_ready
+                if idle_gap < self.break_min:
+                    is_continuous = True
+            if is_continuous:
+                dyn.crew_consec_assign_count[crew_id] += 1
+
             # on_duty がまだ False なら、当日勤務開始をセット
             if not bool(dyn.crew_on_duty[crew_id]):
                 dyn.crew_on_duty[crew_id] = True
@@ -284,12 +298,24 @@ class CrewAREnv:
 
     # 報酬
 
-    def _compute_reward(self, assignments:Assignment) -> float:
+    def _compute_reward(self, assignments:Assignment, prev_train_last_crew_id: torch.Tensor) -> float:
         """
-        今回ラウンドで発生した増分コスト/ペナルティ/ボーナスから報酬を算出して返す。
-        例:
-          - 移動/遅延/違反ペナルティの合成
-          - 充足率や平準化のボーナス
+        連続同一列車のボーナス:
+          - 直前に同じ crew が同じ train_id を担当していれば +1
+          - 折り返し到着の直後は _assignments_update_state で train_last_crew_id が -1 になっている想定のため、非連続扱い
         """
-        # ここで報酬計算（未実装）
-        return 0.0
+        if assignments.pairs.numel() == 0:
+            return 0.0
+
+        # Static 情報
+        train_id_arr = self.static.train_id
+
+        reward = 0.0
+        for crew_id, task_id in assignments.pairs.tolist():
+            train_id = int(train_id_arr[task_id].item())
+            last_crew = int(prev_train_last_crew_id[train_id].item())
+            if last_crew == crew_id:
+                reward += 1.0
+
+        return reward
+    

@@ -2,7 +2,7 @@ import numpy as np
 import torch
 
 
-def calculate_reward(sol, vec_env,device,coeffs=None, return_components=False):
+def calculate_reward(sol,env_reward, vec_env,device, return_components=False,coeffs=None):
     """
     sol: LongTensor [B, T]  各タスクに割り当てられたクルーID。未割当は -1
     vec_env: VecCrewAREnv のインスタンス（envs[i].static を持つ）
@@ -23,7 +23,7 @@ def calculate_reward(sol, vec_env,device,coeffs=None, return_components=False):
     """
     if coeffs is None:
         # coeffs = {"work": 0.02, "hitch": 0.1, "unassigned": 10}
-        coeffs = {"work": 0, "hitch": 0, "unassigned": 1.0}
+        coeffs = {"work": 0, "hitch": 0, "unassigned": 1.0,"env_reward":0.1}
 
     B = len(sol)
 
@@ -51,17 +51,16 @@ def calculate_reward(sol, vec_env,device,coeffs=None, return_components=False):
         + coeffs["hitch"] * hitch_time
         + coeffs["unassigned"] * unassigned
     )
-    reward = -cost  # 少ないほど良い => 報酬は負コスト
+    env_reward = coeffs["env_reward"] * env_reward.to(device)
+    reward = -cost + env_reward
 
     if return_components:
         comps = {
-            "total_work_time": work_time,
-            "total_hitch_time": hitch_time,
-            "unassigned_count": unassigned,
+            "env_reward": env_reward,
             "cost": cost,
         }
         return reward, comps
-    return reward
+    return reward 
     
 
 def evaluate_solution(s, sol):

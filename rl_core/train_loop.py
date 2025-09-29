@@ -6,25 +6,40 @@ from torch.nn.utils import clip_grad_norm_
 from rl_env.reward import calculate_reward
 
 @torch.no_grad()
-def evaluate_mean_reward(policy, vec_env, batch_size: int, device: torch.device,mode):
+def evaluate_mean_reward(policy, vec_env, batch_size: int, device: torch.device,mode, return_env_reward=False):
 
     td = vec_env.generate_batch_td(B=batch_size)
     env_out = vec_env.reset(td)
 
     out = policy(env_out=env_out, vec_env=vec_env, phase="val")
     sol = out["solution"]
-    reward = calculate_reward(sol, vec_env, device=device)  # [B]
+    env_reward = out["reward"]
+    if return_env_reward:
+        reward ,comps = calculate_reward(sol,env_reward, vec_env, device=device,return_components=True)  # [B]
+    else:
+        reward  = calculate_reward(sol,env_reward, vec_env, device=device)  # [B]
     if mode == "model":
         sampling_out =  vec_env.reset(td)
         sam_out = policy(env_out=sampling_out, vec_env=vec_env, phase="train")
         sam_sol = sam_out["solution"]
-        sam_reward = calculate_reward(sam_sol, vec_env, device=device)  # [B]
+        sam_env_reward = sam_out["reward"]
+        if return_env_reward:
+            sam_reward ,sam_comps = calculate_reward(sam_sol, sam_env_reward, vec_env, device=device,return_components=True)  # [B]
+        else:
+            sam_reward = calculate_reward(sam_sol, sam_env_reward, vec_env, device=device)  # [B]
         sampling_mean_reward = sam_reward.mean()
         
         # print("sampling_mean", sampling_mean_reward)
         # count_unassign(batch_size,vec_env,sam_sol)
+    if return_env_reward:
+        reward_dict = {
+            "env_reward": comps["env_reward"].mean(),
+            "cost": comps["cost"].mean(),
+            "sampling_env_reward": sam_comps["env_reward"].mean() if mode == "model" else None,
+            "sampling_cost": sam_comps["cost"].mean() if mode == "model" else None,
+        }
 
-    return reward.mean().item(), sampling_mean_reward if mode == "model" else None
+    return reward.mean().item(), sampling_mean_reward if mode == "model" else None ,sol ,reward_dict if return_env_reward else None
 
 def reinforce_step(policy, baseline_policy, vec_env, batch_size: int, device: torch.device, optimizer, grad_clip: float):
     td_batch = vec_env.generate_batch_td(B=batch_size)
@@ -32,14 +47,15 @@ def reinforce_step(policy, baseline_policy, vec_env, batch_size: int, device: to
 
     outdict = policy(env_out=env_out, vec_env=vec_env, phase="train")
     sol = outdict["solution"]
-    logprobs = outdict["log_likelihood"]  # [B]
-    reward = calculate_reward(sol, vec_env, device=device)  # [B]
 
+    logprobs = outdict["log_likelihood"]  # [B]
+    reward = calculate_reward(sol, outdict["reward"], vec_env, device=device)  # [B]
+   
     with torch.no_grad():
         base_env_out = vec_env.reset(td_batch)
         base_out = baseline_policy(env_out=base_env_out, vec_env=vec_env, phase="val")
         base_sol = base_out["solution"]
-        baseline_reward = calculate_reward(base_sol, vec_env, device=device)  # [B]
+        baseline_reward = calculate_reward(base_sol,base_out["reward"], vec_env, device=device)  # [B]
 
     advantage = (reward - baseline_reward).detach()
     adv_mean = advantage.mean()

@@ -49,11 +49,10 @@ class Policy(nn.Module):
             step += 1
 
         logprobs = decoding_strategy.post_decoder_hook()
-        sol = vec_env.return_solution()
-        
+        sol,reward = vec_env.return_solution()
+
         sol = [s.to(self.device) for s in sol]
-      
-        reward = 0 # dummy
+        reward = reward.to(self.device)
 
         outdict = {
             "solution": sol,

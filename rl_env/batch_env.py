@@ -1,4 +1,4 @@
-# vec_env.py（コピー＆ペースト）
+                        # vec_env.py（コピー＆ペースト）
 from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import torch
@@ -23,6 +23,7 @@ class VecCrewAREnv:
         self.device = device   
 
         self.done = torch.zeros(batch_size, dtype=torch.bool)  # [B] 各envのdone状態
+        self.saved_rewards = torch.zeros(batch_size, dtype=torch.float32, device=self.device)  # 連続同一列車の累積報酬
  
     @torch.no_grad()
     def reset(
@@ -34,6 +35,8 @@ class VecCrewAREnv:
         masks = []
         pairs = []
         self.done = torch.zeros(self.batch_size, dtype=torch.bool, device=self.device)
+        self.saved_rewards = torch.zeros(self.batch_size, dtype=torch.float32, device=self.device)
+
 
         for i, env in enumerate(self.envs):
             td = td_list[i]
@@ -99,6 +102,8 @@ class VecCrewAREnv:
             # print()
             # print(f"Env {i} processing assignment")
             dyn, mask, pair, reward, done, info = env.step(assignments[i])
+            
+            self.saved_rewards[i] += float(reward)
 
             if done:
                 self.done[i] = True
@@ -143,7 +148,7 @@ class VecCrewAREnv:
             sol_tensor = torch.as_tensor(sol, dtype=torch.long, device=self.device)
             solutions.append(sol_tensor)
 
-        return solutions
+        return solutions, self.saved_rewards.clone()
 
     def generate_batch_td(
         self,
